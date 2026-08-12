@@ -86,3 +86,20 @@ class ToolObservation(BaseModel):
     detail: str
     latency_ms: float = Field(ge=0)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReasoningStep(BaseModel):
+    """Auditable ReAct trace without exposing private chain-of-thought."""
+
+    pattern: str = "ReAct"
+    decision: str
+    action: str
+    observation: str
+    attempt: int = Field(ge=1)
+
+
+class AgentMessage(BaseModel):
+    sender: str
+    recipient: str
+    message_type: str
+    payload: dict[str, Any]

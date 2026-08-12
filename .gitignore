@@ -15,3 +15,4 @@ logs/
 artifacts/bot*.log
 /work/
 /outputs/
+/tmp/

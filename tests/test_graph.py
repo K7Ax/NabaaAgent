@@ -28,6 +28,11 @@ def test_graph_publishes_verified_candidate(tmp_path: Path, verified_page: Sourc
     assert result["final_status"] == VerificationStatus.VERIFIED.value
     assert result["search_attempts"] == 1
     assert len(result["observations"]) >= 2
+    assert result["reasoning_trace"][0]["pattern"] == "ReAct"
+    assert result["reasoning_trace"][0]["action"]
+    assert result["reasoning_trace"][0]["observation"]
+    assert result["agent_messages"][0]["sender"] == "DiscoveryAgent"
+    assert result["agent_messages"][1]["sender"] == "VerificationAgent"
 
 
 def test_graph_skips_unextractable_page_and_uses_next_result(

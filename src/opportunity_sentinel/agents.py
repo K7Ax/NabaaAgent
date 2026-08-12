@@ -51,13 +51,15 @@ class DiscoveryAgent:
             reverse=True,
         )[:2]
         safe_pages: list[dict[str, Any]] = []
-        structured = [
+        preopened = [
             page
             for page in pages
-            if page.content.startswith("OPPORTUNITY_SENTINEL_STRUCTURED_SOURCE")
+            if page.content.startswith(
+                ("OPPORTUNITY_SENTINEL_STRUCTURED_SOURCE", "TAVILY_EXTRACTED_SOURCE")
+            )
         ]
-        safe_pages.extend(_page_to_dict(page) for page in structured)
-        web_pages = [page for page in pages if page not in structured]
+        safe_pages.extend(_page_to_dict(page) for page in preopened)
+        web_pages = [page for page in pages if page not in preopened]
         if web_pages:
             with ThreadPoolExecutor(max_workers=min(5, len(web_pages))) as executor:
                 opened_results = executor.map(

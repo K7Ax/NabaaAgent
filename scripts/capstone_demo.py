@@ -5,9 +5,11 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import httpx
+from fastapi.testclient import TestClient
 from langgraph.types import Command
 
 from opportunity_sentinel.agents import DiscoveryAgent, VerificationAgent
+from opportunity_sentinel.api import app
 from opportunity_sentinel.graph import build_graph, thread_config
 from opportunity_sentinel.llm import ModelRouter, Provider
 from opportunity_sentinel.logging import configure_logging
@@ -117,6 +119,8 @@ def main() -> None:
         Command(resume={"decision": "reject"}),
         config=thread_config("demo-hitl"),
     )
+    with TestClient(app) as client:
+        health_response = client.get("/health")
 
     report = {
         "agentic_pattern": "ReAct",
@@ -136,7 +140,10 @@ def main() -> None:
         "happy_path": {
             "final_status": verified.get("final_status"),
             "tool_observations": len(verified.get("observations", [])),
+            "observations": verified.get("observations", []),
             "verification": verified.get("verification"),
+            "react_trace": verified.get("reasoning_trace"),
+            "agent_messages": verified.get("agent_messages"),
         },
         "security_path": {
             "final_status": blocked.get("final_status"),
@@ -148,8 +155,23 @@ def main() -> None:
             "search_attempts": paused.get("search_attempts"),
             "resumed_after_graph_rebuild": resumed.get("human_decision") == "reject",
             "final_status": resumed.get("final_status"),
+            "interrupt_payload": (
+                paused["__interrupt__"][0].value if paused.get("__interrupt__") else None
+            ),
         },
         "provider_resilience": prove_provider_fallback(),
+        "production_artifacts": {
+            "persistent_checkpoint_file_created": CHECKPOINTS.exists(),
+            "fastapi_health_status": health_response.status_code,
+            "fastapi_health_body": health_response.json(),
+            "dockerfile_present": (ROOT / "Dockerfile").exists(),
+            "compose_present": (ROOT / "docker-compose.yml").exists(),
+        },
+        "documentation": {
+            "readme_present": (ROOT / "README.md").exists(),
+            "architecture_present": (ROOT / "docs" / "architecture.md").exists(),
+            "rubric_audit_present": (ROOT / "docs" / "rubric-audit.md").exists(),
+        },
     }
     destination = ARTIFACTS / "capstone-evidence.json"
     destination.write_text(json.dumps(report, indent=2), encoding="utf-8")

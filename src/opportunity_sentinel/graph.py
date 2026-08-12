@@ -11,8 +11,10 @@ from langgraph.types import Command, interrupt
 from opportunity_sentinel.agents import DiscoveryAgent, EligibilityMatcher, VerificationAgent
 from opportunity_sentinel.logging import logger
 from opportunity_sentinel.models import (
+    AgentMessage,
     EligibilityDecision,
     OpportunityCandidate,
+    ReasoningStep,
     StudentProfile,
     VerificationReport,
     VerificationStatus,
@@ -38,11 +40,23 @@ def build_graph(
             missing = state["verification"].get("missing_fields", [])
             query = f"{query} official {' '.join(missing)}"
         pages, observations = discovery_agent.discover(query)
+        successful_tools = [item["tool"] for item in observations if item["success"]]
+        trace = ReasoningStep(
+            decision=(
+                "Search again for missing evidence using first-party sources"
+                if state.get("verification")
+                else "Discover current opportunities using first-party tools before web fallback"
+            ),
+            action=" -> ".join(successful_tools) or "search_web",
+            observation=f"Retrieved {len(pages)} candidate pages",
+            attempt=attempt,
+        )
         logger.info("graph_node", node="discover", attempt=attempt, pages=len(pages))
         return {
             "search_attempts": attempt,
             "candidate_pages": pages,
             "observations": observations,
+            "reasoning_trace": [trace.model_dump(mode="json")],
         }
 
     def sanitize(state: OpportunityState) -> dict:
@@ -90,10 +104,29 @@ def build_graph(
                 remaining_pages = pages[index + 1 :]
                 break
         logger.info("graph_node", node="extract", success=candidate is not None)
+        message = (
+            AgentMessage(
+                sender="DiscoveryAgent",
+                recipient="VerificationAgent",
+                message_type="candidate_for_independent_review",
+                payload={
+                    "source_url": str(candidate.source_url),
+                    "evidence_count": len(candidate.evidence),
+                },
+            )
+            if candidate
+            else AgentMessage(
+                sender="DiscoveryAgent",
+                recipient="Coordinator",
+                message_type="candidate_extraction_failed",
+                payload={"remaining_pages": len(remaining_pages)},
+            )
+        )
         return {
             "candidate": candidate.model_dump(mode="json") if candidate else None,
             "current_page": selected_page,
             "candidate_pages": remaining_pages,
+            "agent_messages": [message.model_dump(mode="json")],
         }
 
     def verify(state: OpportunityState) -> dict:
@@ -110,7 +143,20 @@ def build_graph(
         logger.info(
             "graph_node", node="verify", status=report.status.value, score=report.score
         )
-        return {"verification": report.model_dump(mode="json")}
+        message = AgentMessage(
+            sender="VerificationAgent",
+            recipient="LangGraphCoordinator",
+            message_type="verification_report",
+            payload={
+                "status": report.status.value,
+                "score": report.score,
+                "missing_fields": report.missing_fields,
+            },
+        )
+        return {
+            "verification": report.model_dump(mode="json"),
+            "agent_messages": [message.model_dump(mode="json")],
+        }
 
     def approval(state: OpportunityState) -> Command[Literal["eligibility", "reject", "discover"]]:
         response = interrupt(

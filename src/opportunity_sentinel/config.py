@@ -18,9 +18,10 @@ class Settings(BaseSettings):
     telegram_admin_chat_id: int | None = None
     groq_api_key: str | None = None
     openrouter_api_key: str | None = None
+    tavily_api_key: str | None = None
     groq_model: str = "openai/gpt-oss-20b"
     openrouter_model: str = "openrouter/free"
-    search_max_results: int = Field(default=8, ge=1, le=20)
+    search_max_results: int = Field(default=5, ge=1, le=20)
     request_timeout_seconds: float = Field(default=20, ge=3, le=60)
     notification_interval_minutes: int = Field(default=360, ge=15, le=1440)
 

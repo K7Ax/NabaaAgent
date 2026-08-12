@@ -42,3 +42,38 @@ def test_redirect_to_private_network_is_not_followed(monkeypatch) -> None:
     assert page is None
     assert observation.success is False
     assert calls == ["https://public.test/opportunity"]
+
+
+def test_tavily_is_a_structured_observable_search_tool(monkeypatch) -> None:
+    def resolve(host: str, port: int):
+        return [(0, 0, 0, "", ("93.184.216.34", port))]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "Bearer redacted-test-key"
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "title": "Current Riyadh CO-OP",
+                        "url": "https://careers.example/current",
+                        "content": "registration open",
+                        "raw_content": "Official application deadline and requirements",
+                    }
+                ],
+                "usage": {"credits": 2},
+                "request_id": "request-123",
+            },
+        )
+
+    monkeypatch.setattr(tools_module, "getaddrinfo", resolve)
+    research = WebResearchTools(tavily_api_key="redacted-test-key")
+    research.client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    pages, observation = research.search_web("CO-OP Riyadh open registration")
+
+    assert len(pages) == 1
+    assert pages[0].content.startswith("TAVILY_EXTRACTED_SOURCE")
+    assert observation.tool == "tavily_search"
+    assert observation.metadata["credits"] == 2
+    assert observation.metadata["request_id"] == "request-123"

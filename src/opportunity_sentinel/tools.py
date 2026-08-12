@@ -72,8 +72,14 @@ class InMemoryResearchTools:
 class WebResearchTools:
     """Live web search and safe page retrieval tools used by the Discovery Agent."""
 
-    def __init__(self, max_results: int = 8, timeout: float = 20) -> None:
+    def __init__(
+        self,
+        max_results: int = 5,
+        timeout: float = 20,
+        tavily_api_key: str | None = None,
+    ) -> None:
         self.max_results = max_results
+        self.tavily_api_key = tavily_api_key
         self.client = httpx.Client(
             timeout=timeout,
             follow_redirects=False,
@@ -83,6 +89,10 @@ class WebResearchTools:
     def search_web(self, query: str) -> tuple[list[SourcePage], ToolObservation]:
         if "site:tuwaiq.edu.sa" in query.casefold():
             return self._search_tuwaiq(query)
+        if self.tavily_api_key:
+            pages, observation = self._search_tavily(query)
+            if observation.success and pages:
+                return pages, observation
         started = time.perf_counter()
         try:
             results = list(
@@ -114,6 +124,70 @@ class WebResearchTools:
             detail=detail,
             latency_ms=elapsed,
             metadata={"query": query, "result_count": len(pages)},
+        )
+
+    def _search_tavily(self, query: str) -> tuple[list[SourcePage], ToolObservation]:
+        started = time.perf_counter()
+        pages: list[SourcePage] = []
+        credits = 0
+        request_id = None
+        try:
+            response = self.client.post(
+                "https://api.tavily.com/search",
+                headers={"Authorization": f"Bearer {self.tavily_api_key}"},
+                json={
+                    "query": query[:400],
+                    "search_depth": "advanced",
+                    "chunks_per_source": 3,
+                    "max_results": self.max_results,
+                    "include_raw_content": "markdown",
+                    "include_answer": False,
+                    "time_range": "year",
+                },
+            )
+            response.raise_for_status()
+            body = response.json()
+            credits = body.get("usage", {}).get("credits", 0)
+            request_id = body.get("request_id")
+            for item in body.get("results", []):
+                url = item.get("url")
+                if not url or not _public_http_url(url):
+                    continue
+                content = item.get("raw_content") or item.get("content") or ""
+                pages.append(
+                    SourcePage(
+                        url=url,
+                        title=item.get("title") or "Untitled opportunity page",
+                        content="TAVILY_EXTRACTED_SOURCE\n" + content[:60_000],
+                        official=_looks_official(url),
+                    )
+                )
+            success = True
+            detail = f"Tavily returned {len(pages)} ranked and extracted results"
+        except (httpx.HTTPError, ValueError, KeyError) as exc:
+            success = False
+            detail = f"Tavily failed: {type(exc).__name__}"
+        elapsed = (time.perf_counter() - started) * 1000
+        logger.info(
+            "tool_call",
+            tool="tavily_search",
+            success=success,
+            latency_ms=elapsed,
+            credits=credits,
+            request_id=request_id,
+        )
+        return pages, ToolObservation(
+            tool="tavily_search",
+            success=success,
+            detail=detail,
+            latency_ms=elapsed,
+            metadata={
+                "query": query,
+                "result_count": len(pages),
+                "credits": credits,
+                "request_id": request_id,
+                "search_depth": "advanced",
+            },
         )
 
     def _search_tuwaiq(self, query: str) -> tuple[list[SourcePage], ToolObservation]:

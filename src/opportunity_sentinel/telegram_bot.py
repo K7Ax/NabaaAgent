@@ -60,7 +60,11 @@ def create_runtime(settings: Settings | None = None) -> BotRuntime:
         openrouter_model=settings.openrouter_model,
         timeout=settings.request_timeout_seconds,
     )
-    tools = WebResearchTools(settings.search_max_results, settings.request_timeout_seconds)
+    tools = WebResearchTools(
+        settings.search_max_results,
+        settings.request_timeout_seconds,
+        settings.tavily_api_key,
+    )
     graph = build_graph(
         DiscoveryAgent(tools, llm),
         VerificationAgent(llm),

@@ -17,4 +17,6 @@
 - [x] Git history is incremental and secrets/generated databases are ignored.
 - [x] Training attribution and SDAIA Academy link are present.
 - [x] Configure and validate Telegram, administrator, Groq, OpenRouter, and live search.
+- [x] Map every scored requirement to executed repository evidence.
+- [ ] Publish the repository to GitHub (mandatory PDF submission requirement).
 - [ ] Capture final Telegram interaction screenshots for the presentation.

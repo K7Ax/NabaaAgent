@@ -15,4 +15,6 @@ class OpportunityState(TypedDict, total=False):
     eligibility: dict[str, Any] | None
     final_status: str | None
     observations: Annotated[list[dict[str, Any]], operator.add]
+    reasoning_trace: Annotated[list[dict[str, Any]], operator.add]
+    agent_messages: Annotated[list[dict[str, Any]], operator.add]
     errors: Annotated[list[str], operator.add]

@@ -42,6 +42,13 @@ downloads source pages, and returns structured observations with latency and met
 For Tuwaiq programs it uses the academy's public first-party API and applies deterministic
 validation to explicit structured fields, avoiding search-index staleness and unnecessary
 LLM interpretation.
+For sources without a first-party connector, optional Tavily advanced search supplies
+ranked extracted content and records credit usage/request IDs. DDGS and safe page opening
+remain the fallback, so Tavily is not a single point of failure.
+
+The ReAct trace stores auditable `decision`, `action`, and `observation` summaries without
+persisting private chain-of-thought. Discovery sends a structured candidate message to
+Verification, which returns a structured verification message to the LangGraph coordinator.
 `InMemoryResearchTools` implements the same interface for repeatable security and
 evaluation runs. The discovery agent uses Groq first and falls back to OpenRouter when a
 provider is unavailable or rate limited.

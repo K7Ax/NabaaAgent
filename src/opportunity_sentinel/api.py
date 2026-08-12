@@ -34,5 +34,6 @@ def readiness() -> dict[str, object]:
             )
             if configured
         ],
+        "tavily_configured": bool(settings.tavily_api_key),
         "checkpoint_path": str(settings.checkpoint_db_path),
     }

@@ -15,7 +15,38 @@
   },
   "happy_path": {
     "final_status": "verified",
-    "tool_observations": 2,
+    "tool_observations": 3,
+    "observations": [
+      {
+        "tool": "search_web",
+        "success": true,
+        "detail": "Found 1 candidate pages",
+        "latency_ms": 0.01469999915570952,
+        "metadata": {
+          "query": "coop Riyadh",
+          "attempt": 1
+        }
+      },
+      {
+        "tool": "search_web",
+        "success": true,
+        "detail": "Found 1 candidate pages",
+        "latency_ms": 0.010199997632298619,
+        "metadata": {
+          "query": "coop Riyadh site:hub.misk.org.sa",
+          "attempt": 2
+        }
+      },
+      {
+        "tool": "open_page",
+        "success": true,
+        "detail": "Page opened",
+        "latency_ms": 0.0011000010999850929,
+        "metadata": {
+          "url": "https://official.example/verified"
+        }
+      }
+    ],
     "verification": {
       "status": "verified",
       "score": 1.0,
@@ -25,7 +56,37 @@
         "required_fields_have_evidence"
       ],
       "requires_human_review": false
-    }
+    },
+    "react_trace": [
+      {
+        "pattern": "ReAct",
+        "decision": "Discover current opportunities using first-party tools before web fallback",
+        "action": "search_web -> search_web -> open_page",
+        "observation": "Retrieved 1 candidate pages",
+        "attempt": 1
+      }
+    ],
+    "agent_messages": [
+      {
+        "sender": "DiscoveryAgent",
+        "recipient": "VerificationAgent",
+        "message_type": "candidate_for_independent_review",
+        "payload": {
+          "source_url": "https://official.example/verified",
+          "evidence_count": 4
+        }
+      },
+      {
+        "sender": "VerificationAgent",
+        "recipient": "LangGraphCoordinator",
+        "message_type": "verification_report",
+        "payload": {
+          "status": "verified",
+          "score": 1.0,
+          "missing_fields": []
+        }
+      }
+    ]
   },
   "security_path": {
     "final_status": "rejected",
@@ -38,7 +99,68 @@
     "paused": true,
     "search_attempts": 2,
     "resumed_after_graph_rebuild": true,
-    "final_status": "rejected"
+    "final_status": "rejected",
+    "interrupt_payload": {
+      "kind": "opportunity_review",
+      "candidate": {
+        "title": "Software Engineering CO-OP Program",
+        "organization": "Example Technology Company",
+        "opportunity_type": "coop",
+        "city": "Riyadh",
+        "delivery_mode": "in_person",
+        "accepted_majors": [
+          "Software Engineering"
+        ],
+        "accepted_graduation_years": [],
+        "deadline": null,
+        "registration_open": null,
+        "application_url": "https://official.example/apply-later",
+        "source_url": "https://official.example/incomplete",
+        "evidence": [
+          {
+            "field_name": "organization",
+            "value": "Example Technology Company",
+            "quote": "organization: Example Technology Company",
+            "source_url": "https://official.example/incomplete",
+            "official_source": true,
+            "captured_at": "2026-08-12T19:13:06.479208Z"
+          },
+          {
+            "field_name": "city",
+            "value": "Riyadh",
+            "quote": "city: Riyadh",
+            "source_url": "https://official.example/incomplete",
+            "official_source": true,
+            "captured_at": "2026-08-12T19:13:06.479208Z"
+          },
+          {
+            "field_name": "accepted_majors",
+            "value": "Software Engineering",
+            "quote": "accepted_majors: Software Engineering",
+            "source_url": "https://official.example/incomplete",
+            "official_source": true,
+            "captured_at": "2026-08-12T19:13:06.479208Z"
+          }
+        ]
+      },
+      "verification": {
+        "status": "needs_research",
+        "score": 0.69,
+        "missing_fields": [
+          "application_open_evidence"
+        ],
+        "conflicts": [],
+        "reasons": [
+          "required_evidence_is_missing"
+        ],
+        "requires_human_review": false
+      },
+      "allowed_decisions": [
+        "approve",
+        "reject",
+        "research_again"
+      ]
+    }
   },
   "provider_resilience": {
     "providers_called": [
@@ -47,5 +169,20 @@
     ],
     "fallback_used": true,
     "result_status": "verified"
+  },
+  "production_artifacts": {
+    "persistent_checkpoint_file_created": true,
+    "fastapi_health_status": 200,
+    "fastapi_health_body": {
+      "status": "ok",
+      "service": "opportunity-sentinel"
+    },
+    "dockerfile_present": true,
+    "compose_present": true
+  },
+  "documentation": {
+    "readme_present": true,
+    "architecture_present": true,
+    "rubric_audit_present": true
   }
 }

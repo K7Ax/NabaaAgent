@@ -15,6 +15,8 @@ evidence, eligibility matching, and human review control publication.
 - Two distinct agents: Discovery and independent Verification, coordinated through typed
   shared state.
 - Live web search and page retrieval with URL validation and private-network/SSRF blocking.
+- Optional Tavily advanced search for internships and CO-OP opportunities, including
+  ranked extracted content, date filtering, credit telemetry, and fallback to DDGS.
 - A first-party Tuwaiq connector reads the academy's public structured API for current
   registration state, deadlines, cost, location, requirements, and application links;
   general search is a fallback rather than the only discovery mechanism.
@@ -49,6 +51,7 @@ TELEGRAM_BOT_TOKEN=your_botfather_token
 TELEGRAM_ADMIN_CHAT_ID=your_numeric_telegram_id
 GROQ_API_KEY=your_groq_key
 OPENROUTER_API_KEY=your_openrouter_key
+TAVILY_API_KEY=your_optional_tavily_key
 ```
 
 Then run:
@@ -68,6 +71,7 @@ Detailed credential and admin setup is in
 .venv\Scripts\python -m pytest
 .venv\Scripts\python scripts\capstone_demo.py
 .venv\Scripts\python scripts\live_smoke_test.py
+.venv\Scripts\python scripts\live_workflow_test.py
 ```
 
 The deterministic demo proves the successful path, a blocked indirect prompt-injection
@@ -117,6 +121,8 @@ flowchart LR
 See [`docs/architecture.md`](docs/architecture.md),
 [`docs/security.md`](docs/security.md), and
 [`docs/evaluation.md`](docs/evaluation.md) for the engineering rationale and proof map.
+The exact 100-point mapping and GitHub submission status are in
+[`docs/rubric-audit.md`](docs/rubric-audit.md).
 
 ## Scope and honest limitations
 
@@ -141,4 +147,6 @@ See [`docs/architecture.md`](docs/architecture.md),
 - `tests/` — graph, security, API, LLM fallback, storage, and UI tests.
 - `scripts/capstone_demo.py` — reproducible executed evidence.
 
-Built for the Advanced Agentic AI Systems Engineering capstone, August 2026 cohort.
+Built for the **Advanced Agentic AI Systems Engineering** capstone, August 2026 cohort,
+delivered through SDAIA Academy. See
+[SDAIA Academy on GitHub](https://github.com/SDAIAAcademy).
