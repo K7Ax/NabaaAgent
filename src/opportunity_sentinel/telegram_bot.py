@@ -172,11 +172,22 @@ def build_router(runtime: BotRuntime) -> Router:
             None,
         )
         thread_id = f"opp-{callback.from_user.id}-{uuid.uuid4().hex[:10]}"
-        result = await asyncio.to_thread(
-            runtime.graph.invoke,
-            _initial_state(thread_id, profile),
-            thread_config(thread_id),
-        )
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    runtime.graph.invoke,
+                    _initial_state(thread_id, profile),
+                    thread_config(thread_id),
+                ),
+                timeout=90,
+            )
+        except TimeoutError:
+            logger.warning("interactive_search_timeout", thread_id=thread_id)
+            await callback.message.answer(
+                "استغرق المصدر وقتًا أطول من المتوقع. أوقفت الانتظار؛ جرّب البحث مجددًا.",
+                reply_markup=main_menu(),
+            )
+            return
         if "__interrupt__" in result:
             await _send_admin_review(bot, runtime, thread_id, result)
             await callback.message.answer(

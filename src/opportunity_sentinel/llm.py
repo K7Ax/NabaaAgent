@@ -65,6 +65,43 @@ class ModelRouter:
                     success=True,
                 )
                 return result
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 400:
+                    try:
+                        logger.info(
+                            "llm_schema_retry",
+                            task=task,
+                            provider=provider.name,
+                            mode="best_effort",
+                        )
+                        result = self._call(
+                            provider,
+                            system,
+                            user,
+                            schema,
+                            strict=False,
+                        )
+                        logger.info(
+                            "llm_call",
+                            task=task,
+                            provider=provider.name,
+                            model=provider.model,
+                            latency_ms=round((time.perf_counter() - started) * 1000, 2),
+                            success=True,
+                            schema_mode="best_effort",
+                        )
+                        return result
+                    except (httpx.HTTPError, KeyError, ValueError, json.JSONDecodeError):
+                        pass
+                detail = f"{provider.name}:{type(exc).__name__}:{exc}"
+                errors.append(detail)
+                logger.warning(
+                    "llm_fallback",
+                    task=task,
+                    provider=provider.name,
+                    latency_ms=round((time.perf_counter() - started) * 1000, 2),
+                    error_type=type(exc).__name__,
+                )
             except (httpx.HTTPError, KeyError, ValueError, json.JSONDecodeError) as exc:
                 detail = f"{provider.name}:{type(exc).__name__}:{exc}"
                 errors.append(detail)
@@ -83,6 +120,7 @@ class ModelRouter:
         system: str,
         user: str,
         schema: type[BaseModel],
+        strict: bool = True,
     ) -> BaseModel:
         headers = {
             "Authorization": f"Bearer {provider.api_key}",
@@ -100,7 +138,7 @@ class ModelRouter:
                 "type": "json_schema",
                 "json_schema": {
                     "name": schema.__name__,
-                    "strict": True,
+                    "strict": strict,
                     "schema": _strict_json_schema(schema.model_json_schema()),
                 },
             },

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from typing import Any
 
@@ -31,8 +32,12 @@ class DiscoveryAgent:
         pages, search_observation = self.tools.search_web(query)
         observations = [search_observation.model_dump(mode="json")]
         safe_pages: list[dict[str, Any]] = []
-        for page in pages:
-            opened, open_observation = self.tools.open_page(page.url)
+        with ThreadPoolExecutor(max_workers=min(5, max(1, len(pages)))) as executor:
+            opened_results = executor.map(
+                self.tools.open_page,
+                (page.url for page in pages),
+            )
+        for opened, open_observation in opened_results:
             observations.append(open_observation.model_dump(mode="json"))
             if opened:
                 safe_pages.append(_page_to_dict(opened))
@@ -119,7 +124,7 @@ class DiscoveryAgent:
         )
         user = (
             f"SOURCE_URL: {page.url}\nOFFICIAL_SOURCE: {page.official}\n"
-            f"PAGE_TITLE: {page.title}\n\nWEBPAGE_DATA:\n{page.content[:45_000]}"
+            f"PAGE_TITLE: {page.title}\n\nWEBPAGE_DATA:\n{page.content[:20_000]}"
         )
         result = self.llm.generate_json(
             system=system,

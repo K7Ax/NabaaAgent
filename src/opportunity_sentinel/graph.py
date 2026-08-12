@@ -82,15 +82,18 @@ def build_graph(
             return {"candidate": None}
         candidate = None
         selected_page = None
-        for page in pages:
+        remaining_pages = []
+        for index, page in enumerate(pages):
             candidate = discovery_agent.extract(page)
             if candidate:
                 selected_page = page
+                remaining_pages = pages[index + 1 :]
                 break
         logger.info("graph_node", node="extract", success=candidate is not None)
         return {
             "candidate": candidate.model_dump(mode="json") if candidate else None,
             "current_page": selected_page,
+            "candidate_pages": remaining_pages,
         }
 
     def verify(state: OpportunityState) -> dict:
@@ -150,6 +153,8 @@ def build_graph(
 
     def after_verify(state: OpportunityState) -> str:
         report = VerificationReport.model_validate(state["verification"])
+        if report.status != VerificationStatus.VERIFIED and state.get("candidate_pages"):
+            return "extract"
         if report.status == VerificationStatus.VERIFIED:
             return "eligibility"
         if report.status == VerificationStatus.REJECTED:
@@ -179,7 +184,9 @@ def build_graph(
     builder.add_conditional_edges("sanitize", after_sanitize, ["extract", "reject"])
     builder.add_edge("extract", "verify")
     builder.add_conditional_edges(
-        "verify", after_verify, ["eligibility", "reject", "discover", "approval"]
+        "verify",
+        after_verify,
+        ["eligibility", "reject", "discover", "approval", "extract"],
     )
     builder.add_conditional_edges("eligibility", after_eligibility, ["publish", "reject"])
     builder.add_edge("publish", END)
