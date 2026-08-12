@@ -3,9 +3,9 @@
   "paused_for_human_review": false,
   "search_attempts": 1,
   "sources_examined": 0,
-  "title": "برنامج أساسيات أنظمة وكلاء الذكاء الاصطناعي",
+  "title": "برنامج تطبيق قاعدة بيانات SQL باستخدام لغة Python",
   "organization": "أكاديمية طويق",
-  "source_url": "https://tuwaiq.edu.sa/bootcamp/l6nbwBDp/view",
+  "source_url": "https://tuwaiq.edu.sa/bootcamp/q3BnNB0G/view",
   "verification": {
     "status": "verified",
     "score": 1.0,
@@ -22,5 +22,10 @@
     "reasons": [
       "eligible"
     ]
-  }
+  },
+  "verified_result_count": 2,
+  "verified_sources": [
+    "https://tuwaiq.edu.sa/bootcamp/l6nbwBDp/view",
+    "https://tuwaiq.edu.sa/bootcamp/q3BnNB0G/view"
+  ]
 }

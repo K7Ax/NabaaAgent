@@ -26,6 +26,7 @@ def test_graph_publishes_verified_candidate(tmp_path: Path, verified_page: Sourc
         config=thread_config("verified-1"),
     )
     assert result["final_status"] == VerificationStatus.VERIFIED.value
+    assert len(result["verified_candidates"]) == 1
     assert result["search_attempts"] == 1
     assert len(result["observations"]) >= 2
     assert result["reasoning_trace"][0]["pattern"] == "ReAct"
@@ -118,3 +119,51 @@ def test_graph_rejects_verified_but_ineligible_student(
     assert result["final_status"] == VerificationStatus.REJECTED.value
     assert result["eligibility"]["eligible"] is False
     assert "student_major_not_accepted" in result["eligibility"]["reasons"]
+
+
+def test_graph_collects_multiple_verified_candidates(
+    tmp_path: Path, verified_page: SourcePage
+) -> None:
+    second = SourcePage(
+        url="https://second.official.example/coop",
+        title="Second Software Engineering CO-OP",
+        official=True,
+        content=verified_page.content.replace(
+            str(verified_page.url), "https://second.official.example/apply"
+        ).replace("Example Tech", "Second Tech"),
+    )
+    graph, _ = _graph(tmp_path, [verified_page, second])
+    result = graph.invoke(
+        {"thread_id": "batch-1", "search_query": "technical coop Riyadh"},
+        config=thread_config("batch-1"),
+    )
+
+    assert result["final_status"] == VerificationStatus.VERIFIED.value
+    assert len(result["verified_candidates"]) == 2
+    sources = {
+        item["candidate"]["source_url"] for item in result["verified_candidates"]
+    }
+    assert sources == {verified_page.url, second.url}
+
+
+def test_course_discovery_preserves_outside_tuwaiq_source(
+    verified_page: SourcePage,
+) -> None:
+    tuwaiq = SourcePage(
+        url="https://tuwaiq.edu.sa/bootcamp/current/view",
+        title="Tuwaiq technical course",
+        official=True,
+        content="OPPORTUNITY_SENTINEL_STRUCTURED_SOURCE\n" + verified_page.content,
+    )
+    outside = SourcePage(
+        url="https://athkax.sdaia.gov.sa/program/current",
+        title="SDAIA technical course",
+        official=True,
+        content="OPPORTUNITY_SENTINEL_STRUCTURED_SOURCE\n" + verified_page.content,
+    )
+
+    pages, _ = DiscoveryAgent(InMemoryResearchTools([tuwaiq, outside])).discover(
+        "دورات تقنية في الرياض"
+    )
+
+    assert [page["url"] for page in pages] == [tuwaiq.url, outside.url]

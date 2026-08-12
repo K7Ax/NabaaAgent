@@ -5,7 +5,7 @@
 | Rubric area | Automated or captured proof |
 |---|---|
 | Agentic reasoning and tools | Discovery invokes first-party/Tavily/search/open tools; an executed ReAct trace records decision, action, and observation. |
-| Graph orchestration | StateGraph has eight named nodes, conditional edges, and a bounded re-search loop. |
+| Graph orchestration | StateGraph has nine named nodes, conditional edges, batch collection, and a bounded re-search loop. |
 | Multi-agent | Discovery and Verification are separate classes, prompts, responsibilities, and structured `AgentMessage` records connected by shared state. |
 | Security and observability | Injection test is blocked; JSON logs capture node routing, tool latency, provider fallback, failures, and human decisions. |
 | Persistence and HITL | Demo pauses at `interrupt`, rebuilds the graph from the SQLite checkpoint, then resumes with the same thread ID. |
@@ -34,6 +34,7 @@ scope, official/untrusted, duplicate/unique, and eligible/ineligible. We measure
   --cov-report=xml:artifacts\coverage.xml
 .venv\Scripts\python scripts\capstone_demo.py
 .venv\Scripts\python scripts\live_smoke_test.py
+.venv\Scripts\python scripts\live_workflow_test.py
 ```
 
 The repository keeps the XML test report, coverage report, deterministic capstone

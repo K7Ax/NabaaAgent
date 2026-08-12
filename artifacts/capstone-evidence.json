@@ -8,6 +8,7 @@
       "verify",
       "eligibility",
       "approval",
+      "collect",
       "publish",
       "reject"
     ],
@@ -21,7 +22,7 @@
         "tool": "search_web",
         "success": true,
         "detail": "Found 1 candidate pages",
-        "latency_ms": 0.01469999915570952,
+        "latency_ms": 0.014299999747890979,
         "metadata": {
           "query": "coop Riyadh",
           "attempt": 1
@@ -31,7 +32,7 @@
         "tool": "search_web",
         "success": true,
         "detail": "Found 1 candidate pages",
-        "latency_ms": 0.010199997632298619,
+        "latency_ms": 0.008299997716676444,
         "metadata": {
           "query": "coop Riyadh site:hub.misk.org.sa",
           "attempt": 2
@@ -41,7 +42,7 @@
         "tool": "open_page",
         "success": true,
         "detail": "Page opened",
-        "latency_ms": 0.0011000010999850929,
+        "latency_ms": 0.0008999995770864189,
         "metadata": {
           "url": "https://official.example/verified"
         }
@@ -123,7 +124,7 @@
             "quote": "organization: Example Technology Company",
             "source_url": "https://official.example/incomplete",
             "official_source": true,
-            "captured_at": "2026-08-12T19:13:06.479208Z"
+            "captured_at": "2026-08-12T19:49:13.324031Z"
           },
           {
             "field_name": "city",
@@ -131,7 +132,7 @@
             "quote": "city: Riyadh",
             "source_url": "https://official.example/incomplete",
             "official_source": true,
-            "captured_at": "2026-08-12T19:13:06.479208Z"
+            "captured_at": "2026-08-12T19:49:13.324031Z"
           },
           {
             "field_name": "accepted_majors",
@@ -139,7 +140,7 @@
             "quote": "accepted_majors: Software Engineering",
             "source_url": "https://official.example/incomplete",
             "official_source": true,
-            "captured_at": "2026-08-12T19:13:06.479208Z"
+            "captured_at": "2026-08-12T19:49:13.324031Z"
           }
         ]
       },

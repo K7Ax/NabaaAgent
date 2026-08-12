@@ -132,6 +132,7 @@ def main() -> None:
                 "verify",
                 "eligibility",
                 "approval",
+                "collect",
                 "publish",
                 "reject",
             ],

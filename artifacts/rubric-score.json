@@ -1,0 +1,26 @@
+{
+  "rubric": "Advanced Agentic AI Systems Engineering - Capstone Rubric",
+  "audit_date": "2026-08-12",
+  "pass_mark": 60,
+  "minimum_per_deliverable_percent": 40,
+  "scores": {
+    "agentic_reasoning_and_tool_use": {"earned": 15, "possible": 15},
+    "graph_based_orchestration": {"earned": 20, "possible": 20},
+    "multi_agent_system_and_role_specialization": {"earned": 20, "possible": 20},
+    "security_guardrails_and_observability": {"earned": 20, "possible": 20},
+    "production_readiness_persistence_hitl_cloud": {"earned": 20, "possible": 20},
+    "documentation_and_execution_evidence": {"earned": 5, "possible": 5}
+  },
+  "earned_total": 100,
+  "possible_total": 100,
+  "automated_quality_gate": {
+    "tests_passed": 28,
+    "tests_failed": 0,
+    "line_coverage_percent": 70.57,
+    "minimum_coverage_percent": 70,
+    "ruff": "passed",
+    "capstone_proof_script": "passed"
+  },
+  "submission_complete": false,
+  "submission_blocker": "Public GitHub push and green GitHub Actions run are still pending"
+}

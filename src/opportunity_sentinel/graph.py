@@ -186,9 +186,29 @@ def build_graph(
         logger.info("graph_node", node="eligibility", eligible=decision.eligible)
         return {"eligibility": decision.model_dump(mode="json")}
 
-    def publish(_: OpportunityState) -> dict:
+    def collect(state: OpportunityState) -> dict:
+        """Collect one fully verified and eligible result, then continue the batch."""
+        item = {
+            "candidate": state["candidate"],
+            "verification": state["verification"],
+            "eligibility": state["eligibility"],
+        }
+        logger.info(
+            "graph_node",
+            node="collect",
+            source_url=state["candidate"].get("source_url"),
+        )
+        return {"verified_candidates": [item]}
+
+    def publish(state: OpportunityState) -> dict:
         logger.info("graph_node", node="publish", status="verified")
-        return {"final_status": VerificationStatus.VERIFIED.value}
+        update: dict = {"final_status": VerificationStatus.VERIFIED.value}
+        # Keep the legacy single-result fields useful for admin review, API clients,
+        # and old checkpoints while the batch lives in verified_candidates.
+        if state.get("verified_candidates"):
+            latest = state["verified_candidates"][-1]
+            update.update(latest)
+        return update
 
     def reject(state: OpportunityState) -> dict:
         logger.info("graph_node", node="reject", status="rejected")
@@ -203,6 +223,8 @@ def build_graph(
             return "extract"
         if report.status == VerificationStatus.VERIFIED:
             return "eligibility"
+        if state.get("verified_candidates"):
+            return "publish"
         if report.status == VerificationStatus.REJECTED:
             return "reject"
         if (
@@ -214,7 +236,18 @@ def build_graph(
 
     def after_eligibility(state: OpportunityState) -> str:
         decision = EligibilityDecision.model_validate(state["eligibility"])
-        return "publish" if decision.eligible else "reject"
+        if decision.eligible:
+            return "collect"
+        if state.get("candidate_pages"):
+            return "extract"
+        return "publish" if state.get("verified_candidates") else "reject"
+
+    def after_collect(state: OpportunityState) -> str:
+        # Five high-quality results are enough for one Telegram response. Remaining
+        # candidates can be rediscovered in a later search without flooding the user.
+        if len(state.get("verified_candidates", [])) >= 5:
+            return "publish"
+        return "extract" if state.get("candidate_pages") else "publish"
 
     builder = StateGraph(OpportunityState)
     builder.add_node("discover", discover)
@@ -223,6 +256,7 @@ def build_graph(
     builder.add_node("verify", verify)
     builder.add_node("approval", approval)
     builder.add_node("eligibility", eligibility)
+    builder.add_node("collect", collect)
     builder.add_node("publish", publish)
     builder.add_node("reject", reject)
     builder.add_edge(START, "discover")
@@ -232,9 +266,12 @@ def build_graph(
     builder.add_conditional_edges(
         "verify",
         after_verify,
-        ["eligibility", "reject", "discover", "approval", "extract"],
+        ["eligibility", "reject", "discover", "approval", "extract", "publish"],
     )
-    builder.add_conditional_edges("eligibility", after_eligibility, ["publish", "reject"])
+    builder.add_conditional_edges(
+        "eligibility", after_eligibility, ["collect", "extract", "publish", "reject"]
+    )
+    builder.add_conditional_edges("collect", after_collect, ["extract", "publish"])
     builder.add_edge("publish", END)
     builder.add_edge("reject", END)
     return builder.compile(checkpointer=checkpointer)

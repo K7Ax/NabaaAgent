@@ -27,6 +27,8 @@ def main() -> None:
         thread_config(thread_id),
     )
     candidate = result.get("candidate") or {}
+    collected = result.get("verified_candidates") or []
+    observations = result.get("observations") or []
     report = {
         "final_status": result.get("final_status"),
         "paused_for_human_review": "__interrupt__" in result,
@@ -39,6 +41,12 @@ def main() -> None:
         "source_url": candidate.get("source_url"),
         "verification": result.get("verification"),
         "eligibility": result.get("eligibility"),
+        "verified_result_count": len(collected),
+        "verified_sources": [
+            item.get("candidate", {}).get("source_url") for item in collected
+        ],
+        "tools_used": [item.get("tool") for item in observations],
+        "tool_observations": observations,
     }
     evidence_path = Path("artifacts/live-workflow-evidence.json")
     evidence_path.write_text(

@@ -1,3 +1,5 @@
+import json
+
 import httpx
 
 import opportunity_sentinel.tools as tools_module
@@ -16,6 +18,8 @@ def test_trusted_saudi_opportunity_sources_are_recognized() -> None:
     assert _looks_official("https://tuwaiq.edu.sa/bootcamp/example") is True
     assert _looks_official("https://hub.misk.org.sa/ar/programs/skills/example") is True
     assert _looks_official("https://riyadh.sa/ar/article/example") is True
+    assert _looks_official("https://jobs.sabic.com/opportunity") is True
+    assert _looks_official("https://careers.stc.com.sa/internship") is True
     assert _looks_official("https://untrusted.example/opportunity") is False
 
 
@@ -50,6 +54,9 @@ def test_tavily_is_a_structured_observable_search_tool(monkeypatch) -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["Authorization"] == "Bearer redacted-test-key"
+        payload = json.loads(request.content)
+        assert "spa.gov.sa" in payload["include_domains"]
+        assert "athkax.sdaia.gov.sa" in payload["include_domains"]
         return httpx.Response(
             200,
             json={
@@ -70,7 +77,9 @@ def test_tavily_is_a_structured_observable_search_tool(monkeypatch) -> None:
     research = WebResearchTools(tavily_api_key="redacted-test-key")
     research.client = httpx.Client(transport=httpx.MockTransport(handler))
 
-    pages, observation = research.search_web("CO-OP Riyadh open registration")
+    pages, observation = research.search_web(
+        "technical courses Riyadh -site:tuwaiq.edu.sa"
+    )
 
     assert len(pages) == 1
     assert pages[0].content.startswith("TAVILY_EXTRACTED_SOURCE")

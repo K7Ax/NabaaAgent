@@ -1,4 +1,6 @@
-# Opportunity Sentinel
+# NabaaAgent — Opportunity Sentinel
+
+[![Quality Gate](https://github.com/K7Ax/NabaaAgent/actions/workflows/quality.yml/badge.svg)](https://github.com/K7Ax/NabaaAgent/actions/workflows/quality.yml)
 
 An evidence-first AI agent that discovers technical student opportunities in Riyadh,
 checks whether they are still open and suitable for each student, and delivers only
@@ -10,16 +12,16 @@ evidence, eligibility matching, and human review control publication.
 
 ## What is implemented
 
-- A real LangGraph `StateGraph` with eight nodes, conditional routing, and a bounded
-  ReAct-style search loop.
+- A real LangGraph `StateGraph` with nine nodes, conditional routing, batch collection,
+  and a bounded ReAct-style search loop.
 - Two distinct agents: Discovery and independent Verification, coordinated through typed
   shared state.
 - Live web search and page retrieval with URL validation and private-network/SSRF blocking.
-- Optional Tavily advanced search for internships and CO-OP opportunities, including
+- Optional Tavily advanced search for courses, internships, and CO-OP opportunities, including
   ranked extracted content, date filtering, credit telemetry, and fallback to DDGS.
-- A first-party Tuwaiq connector reads the academy's public structured API for current
-  registration state, deadlines, cost, location, requirements, and application links;
-  general search is a fallback rather than the only discovery mechanism.
+- A first-party Tuwaiq connector reads up to 100 academy listings and fetches detailed
+  structured records for current registration state, deadlines, cost, location,
+  requirements, and application links. It runs alongside outside-source discovery.
 - Structured LLM extraction and independent review through Groq, with automatic
   OpenRouter fallback on rate limits or provider failure.
 - Prompt-injection detection, Pydantic output validation, evidence requirements,
@@ -29,7 +31,8 @@ evidence, eligibility matching, and human review control publication.
 - A fully button-driven Arabic Telegram experience: onboarding, search, profile, saved
   opportunities, application links, and administrator approval.
 - Persistent student, opportunity, saved-item, delivery, and deduplication records.
-- Scheduled discovery and alerts for unseen matching opportunities.
+- Each search can deliver up to five distinct verified opportunities; scheduled discovery
+  and alerts also process unseen matches in batches.
 - Structured JSON logs, health/readiness endpoints, Docker image, Docker Compose services,
   automated tests, coverage output, and a reproducible capstone evidence script.
 
@@ -79,6 +82,8 @@ attack, the bounded re-search loop, an actual human interrupt, and resumption fr
 same SQLite checkpoint after rebuilding the graph. Evidence is written to `artifacts/`.
 The live smoke test checks Telegram, the administrator chat, each configured LLM provider,
 and live search without writing API keys to its evidence file.
+The same deterministic quality gate runs on every GitHub push without requiring secrets:
+Ruff, all tests, at least 70% line coverage, and the executed capstone proof paths.
 
 Start the service artifact separately if needed:
 

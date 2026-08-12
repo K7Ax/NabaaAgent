@@ -87,7 +87,11 @@ class WebResearchTools:
         )
 
     def search_web(self, query: str) -> tuple[list[SourcePage], ToolObservation]:
-        if "site:tuwaiq.edu.sa" in query.casefold():
+        folded_query = query.casefold()
+        if (
+            "site:tuwaiq.edu.sa" in folded_query
+            and "-site:tuwaiq.edu.sa" not in folded_query
+        ):
             return self._search_tuwaiq(query)
         if self.tavily_api_key:
             pages, observation = self._search_tavily(query)
@@ -132,18 +136,30 @@ class WebResearchTools:
         credits = 0
         request_id = None
         try:
+            payload = {
+                "query": query[:400],
+                "search_depth": "advanced",
+                "chunks_per_source": 3,
+                "max_results": self.max_results,
+                "include_raw_content": "markdown",
+                "include_answer": False,
+                "time_range": "year",
+            }
+            if "-site:tuwaiq.edu.sa" in query.casefold():
+                payload["include_domains"] = [
+                    "athkax.sdaia.gov.sa",
+                    "futurex.sa",
+                    "hub.misk.org.sa",
+                    "kacst.gov.sa",
+                    "mcit.gov.sa",
+                    "misk.org.sa",
+                    "sdaia.gov.sa",
+                    "spa.gov.sa",
+                ]
             response = self.client.post(
                 "https://api.tavily.com/search",
                 headers={"Authorization": f"Bearer {self.tavily_api_key}"},
-                json={
-                    "query": query[:400],
-                    "search_depth": "advanced",
-                    "chunks_per_source": 3,
-                    "max_results": self.max_results,
-                    "include_raw_content": "markdown",
-                    "include_answer": False,
-                    "time_range": "year",
-                },
+                json=payload,
             )
             response.raise_for_status()
             body = response.json()
@@ -196,7 +212,7 @@ class WebResearchTools:
         pages: list[SourcePage] = []
         try:
             response = self.client.get(
-                "https://tuwaiq.edu.sa/api/GetInitiativePublishesShorten/20/1?type=NORMAL"
+                "https://tuwaiq.edu.sa/api/GetInitiativePublishesShorten/100/1?type=NORMAL"
             )
             response.raise_for_status()
             rows = response.json().get("data", [])
@@ -213,7 +229,9 @@ class WebResearchTools:
                 key=lambda row: _tuwaiq_relevance(row, query),
                 reverse=True,
             )
-            for row in eligible_rows[: self.max_results]:
+            # Preserve enough first-party candidates for batch verification. The final
+            # delivery layer still caps what the student receives in one search.
+            for row in eligible_rows[: max(self.max_results, 10)]:
                 slug = row.get("slug")
                 if not slug:
                     continue
@@ -351,9 +369,18 @@ def _is_public_address(address: str) -> bool:
 
 def _looks_official(url: str) -> bool:
     host = (urlparse(url).hostname or "").casefold()
-    trusted_exact = {"riyadh.sa", "www.riyadh.sa", "spa.gov.sa", "www.spa.gov.sa"}
+    trusted_roots = {
+        "aramco.com",
+        "futurex.sa",
+        "misk.org.sa",
+        "neom.com",
+        "riyadh.sa",
+        "sabic.com",
+        "spa.gov.sa",
+        "stc.com.sa",
+    }
     return (
-        host in trusted_exact
+        any(host == root or host.endswith(f".{root}") for root in trusted_roots)
         or host.endswith(".gov.sa")
         or host.endswith(".edu.sa")
         or host.endswith(".org.sa")

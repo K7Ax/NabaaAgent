@@ -274,24 +274,41 @@ async def _deliver_graph_result(
     runtime: BotRuntime,
     result: dict,
 ) -> None:
-    if result.get("final_status") != "verified" or not result.get("candidate"):
+    collected = result.get("verified_candidates") or []
+    if not collected and result.get("candidate") and result.get("final_status") == "verified":
+        collected = [
+            {
+                "candidate": result["candidate"],
+                "verification": result.get("verification") or {},
+            }
+        ]
+    if result.get("final_status") != "verified" or not collected:
         await message.answer(
             "لم أعثر حاليًا على فرصة تستوفي التوثيق والأهلية.",
             reply_markup=main_menu(),
         )
         return
-    candidate = OpportunityCandidate.model_validate(result["candidate"])
-    score = result.get("verification", {}).get("score", 0.8)
-    identifier = runtime.repository.save_opportunity(candidate, score)
-    if message.chat:
-        runtime.repository.mark_delivered(message.chat.id, identifier)
+    unique: dict[str, dict] = {}
+    for item in collected:
+        candidate_data = item.get("candidate") or {}
+        source_url = str(candidate_data.get("source_url") or "")
+        if source_url:
+            unique.setdefault(source_url, item)
+    delivered = 0
+    for item in list(unique.values())[:5]:
+        candidate = OpportunityCandidate.model_validate(item["candidate"])
+        score = item.get("verification", {}).get("score", 0.8)
+        identifier = runtime.repository.save_opportunity(candidate, score)
+        if message.chat:
+            runtime.repository.mark_delivered(message.chat.id, identifier)
+        await message.answer(
+            opportunity_text(candidate),
+            reply_markup=opportunity_keyboard(identifier, candidate),
+            disable_web_page_preview=True,
+        )
+        delivered += 1
     await message.answer(
-        opportunity_text(candidate),
-        reply_markup=opportunity_keyboard(identifier, candidate),
-        disable_web_page_preview=True,
-    )
-    await message.answer(
-        "يمكنك البحث مجددًا أو مراجعة المحفوظات.",
+        f"✅ تحققت من {delivered} فرص مناسبة. يمكنك البحث مجددًا أو مراجعة المحفوظات.",
         reply_markup=main_menu(),
     )
 
@@ -515,20 +532,34 @@ async def notification_loop(bot: Bot, runtime: BotRuntime) -> None:
                 if "__interrupt__" in result:
                     await _send_admin_review(bot, runtime, thread_id, result)
                     continue
-                if result.get("final_status") != "verified" or not result.get("candidate"):
+                collected = result.get("verified_candidates") or []
+                if not collected and result.get("candidate"):
+                    collected = [
+                        {
+                            "candidate": result["candidate"],
+                            "verification": result.get("verification") or {},
+                        }
+                    ]
+                if result.get("final_status") != "verified" or not collected:
                     continue
-                candidate = OpportunityCandidate.model_validate(result["candidate"])
-                score = result.get("verification", {}).get("score", 0.8)
-                identifier = runtime.repository.save_opportunity(candidate, score)
-                if runtime.repository.was_delivered(profile.telegram_id, identifier):
-                    continue
-                await bot.send_message(
-                    profile.telegram_id,
-                    "🔔 فرصة جديدة مطابقة لملفك\n\n" + opportunity_text(candidate),
-                    reply_markup=opportunity_keyboard(identifier, candidate),
-                    disable_web_page_preview=True,
-                )
-                runtime.repository.mark_delivered(profile.telegram_id, identifier)
+                seen_urls: set[str] = set()
+                for item in collected[:5]:
+                    candidate = OpportunityCandidate.model_validate(item["candidate"])
+                    source_url = str(candidate.source_url)
+                    if source_url in seen_urls:
+                        continue
+                    seen_urls.add(source_url)
+                    score = item.get("verification", {}).get("score", 0.8)
+                    identifier = runtime.repository.save_opportunity(candidate, score)
+                    if runtime.repository.was_delivered(profile.telegram_id, identifier):
+                        continue
+                    await bot.send_message(
+                        profile.telegram_id,
+                        "🔔 فرصة جديدة مطابقة لملفك\n\n" + opportunity_text(candidate),
+                        reply_markup=opportunity_keyboard(identifier, candidate),
+                        disable_web_page_preview=True,
+                    )
+                    runtime.repository.mark_delivered(profile.telegram_id, identifier)
             except Exception as exc:
                 logger.exception(
                     "scheduled_notification_failed",

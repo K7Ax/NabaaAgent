@@ -16,8 +16,11 @@ flowchart TD
     G -->|blocked| X[Reject]
     E --> V[Verification Agent]
     V -->|complete evidence| M[Eligibility Matcher]
-    M -->|student matches| P[Publish]
-    M -->|student does not match| X
+    M -->|student matches| C[Collect verified result]
+    M -->|student does not match and candidates remain| E
+    M -->|student does not match and none collected| X
+    C -->|fewer than 5 and candidates remain| E
+    C -->|5 results or candidates exhausted| P[Publish batch]
     V -->|missing evidence and attempts remain| D
     V -->|uncertain or attempts exhausted| H[Human review interrupt]
     V -->|expired or out of scope| X
@@ -39,11 +42,11 @@ flowchart TD
 
 `WebResearchTools` performs live search, checks URLs against private-network/SSRF risks,
 downloads source pages, and returns structured observations with latency and metadata.
-For Tuwaiq programs it uses the academy's public first-party API and applies deterministic
+For Tuwaiq programs it reads the academy's expanded first-party listing API and applies deterministic
 validation to explicit structured fields, avoiding search-index staleness and unnecessary
 LLM interpretation.
 For sources without a first-party connector, optional Tavily advanced search supplies
-ranked extracted content and records credit usage/request IDs. DDGS and safe page opening
+ranked extracted content from outside sources and records credit usage/request IDs. DDGS and safe page opening
 remain the fallback, so Tavily is not a single point of failure.
 
 The ReAct trace stores auditable `decision`, `action`, and `observation` summaries without

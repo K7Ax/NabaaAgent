@@ -13,6 +13,7 @@ class OpportunityState(TypedDict, total=False):
     verification: dict[str, Any] | None
     human_decision: str | None
     eligibility: dict[str, Any] | None
+    verified_candidates: Annotated[list[dict[str, Any]], operator.add]
     final_status: str | None
     observations: Annotated[list[dict[str, Any]], operator.add]
     reasoning_trace: Annotated[list[dict[str, Any]], operator.add]

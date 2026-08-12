@@ -30,8 +30,18 @@ class DiscoveryAgent:
         self.llm = llm
 
     def discover(self, query: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        if any(marker in query for marker in ("دورات", "معسكر", "course")):
-            queries = [f"{query} site:tuwaiq.edu.sa"]
+        folded_query = query.casefold()
+        if any(marker in folded_query for marker in ("دورة", "دورات", "معسكر", "course")):
+            # Tuwaiq is a high-value first-party source, but never the whole search scope.
+            # The broad query is handled by Tavily (or DDGS fallback) and finds programs
+            # from other academies, universities, government entities, and employers.
+            queries = [
+                f"{query} site:tuwaiq.edu.sa",
+                (
+                    f"{query} سدايا AthkaX مسك مهارات كاكست وزارة الاتصالات "
+                    "برامج ومعسكرات تقنية من جهات رسمية أخرى -site:tuwaiq.edu.sa"
+                ),
+            ]
         else:
             queries = [query, f"{query} site:hub.misk.org.sa"]
         # DDGS uses its own internal concurrency and can stall when several instances run
@@ -45,11 +55,21 @@ class DiscoveryAgent:
         for pages, _ in search_results:
             for page in pages:
                 unique_pages.setdefault(page.url, page)
-        pages = sorted(
+        ranked_pages = sorted(
             unique_pages.values(),
             key=lambda page: _search_result_score(page, query),
             reverse=True,
-        )[:2]
+        )
+        # Alternate Tuwaiq and outside sources so a high-scoring academy connector
+        # cannot crowd every other verified provider out of the candidate window.
+        tuwaiq_pages = [page for page in ranked_pages if _is_tuwaiq(page.url)]
+        outside_pages = [page for page in ranked_pages if not _is_tuwaiq(page.url)]
+        pages: list[SourcePage] = []
+        while len(pages) < 12 and (tuwaiq_pages or outside_pages):
+            if tuwaiq_pages:
+                pages.append(tuwaiq_pages.pop(0))
+            if outside_pages and len(pages) < 12:
+                pages.append(outside_pages.pop(0))
         safe_pages: list[dict[str, Any]] = []
         preopened = [
             page
@@ -343,6 +363,11 @@ def _page_to_dict(page: SourcePage) -> dict[str, Any]:
         "content": page.content,
         "official": page.official,
     }
+
+
+def _is_tuwaiq(url: str) -> bool:
+    host = (urlparse(url).hostname or "").casefold()
+    return host == "tuwaiq.edu.sa" or host.endswith(".tuwaiq.edu.sa")
 
 
 def _search_result_score(page: SourcePage, query: str) -> int:
