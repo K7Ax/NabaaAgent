@@ -24,7 +24,7 @@
   "github": {
     "repository": "https://github.com/K7Ax/NabaaAgent",
     "visibility": "public",
-    "quality_gate_run": "https://github.com/K7Ax/NabaaAgent/actions/runs/31634713737",
+    "quality_gate_run": "https://github.com/K7Ax/NabaaAgent/actions/runs/31634915537",
     "quality_gate_conclusion": "success"
   },
   "submission_complete": true,
