@@ -33,8 +33,9 @@ scope, official/untrusted, duplicate/unique, and eligible/ineligible. We measure
   --cov=opportunity_sentinel `
   --cov-report=xml:artifacts\coverage.xml
 .venv\Scripts\python scripts\capstone_demo.py
+.venv\Scripts\python scripts\live_smoke_test.py
 ```
 
-The repository keeps the XML test report, coverage report, and JSON capstone evidence so
-the evaluator can inspect actual execution rather than code claims.
-
+The repository keeps the XML test report, coverage report, deterministic capstone
+evidence, and secret-safe live connectivity evidence so the evaluator can inspect actual
+execution rather than code claims.

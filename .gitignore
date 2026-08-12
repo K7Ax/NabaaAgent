@@ -12,5 +12,6 @@ dist/
 build/
 *.egg-info/
 logs/
+artifacts/bot*.log
 /work/
 /outputs/

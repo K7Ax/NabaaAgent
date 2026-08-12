@@ -2,7 +2,7 @@ import json
 
 import httpx
 
-from opportunity_sentinel.llm import ModelRouter, Provider
+from opportunity_sentinel.llm import ModelRouter, Provider, _strict_json_schema
 from opportunity_sentinel.models import VerificationReport, VerificationStatus
 
 
@@ -39,3 +39,14 @@ def test_model_router_falls_back_to_second_provider() -> None:
     assert result.status == VerificationStatus.VERIFIED
     assert calls == ["primary.test", "fallback.test"]
 
+
+def test_schema_is_closed_for_strict_structured_output() -> None:
+    schema = VerificationReport.model_json_schema()
+    strict = _strict_json_schema(schema)
+
+    assert strict["additionalProperties"] is False
+    assert set(strict["required"]) == set(strict["properties"])
+    for definition in strict.get("$defs", {}).values():
+        if "properties" in definition:
+            assert definition["additionalProperties"] is False
+            assert set(definition["required"]) == set(definition["properties"])

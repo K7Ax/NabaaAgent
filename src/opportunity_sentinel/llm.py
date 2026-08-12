@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -30,6 +31,7 @@ class Provider:
     api_key: str
     model: str
     headers: dict[str, str] | None = None
+    body_options: dict | None = None
 
 
 class ModelRouter:
@@ -99,10 +101,11 @@ class ModelRouter:
                 "json_schema": {
                     "name": schema.__name__,
                     "strict": True,
-                    "schema": schema.model_json_schema(),
+                    "schema": _strict_json_schema(schema.model_json_schema()),
                 },
             },
         }
+        payload.update(provider.body_options or {})
         response = self.client.post(
             f"{provider.base_url.rstrip('/')}/chat/completions", headers=headers, json=payload
         )
@@ -137,6 +140,10 @@ def build_model_router(
                     "HTTP-Referer": "https://github.com/SDAIAAcademy",
                     "X-Title": "Opportunity Sentinel",
                 },
+                {
+                    "provider": {"require_parameters": True},
+                    "plugins": [{"id": "response-healing"}],
+                },
             )
         )
     return ModelRouter(providers, timeout) if providers else None
@@ -146,3 +153,24 @@ def _strip_code_fence(value: str) -> str:
     value = value.strip()
     match = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", value, flags=re.S | re.I)
     return match.group(1) if match else value
+
+
+def _strict_json_schema(schema: dict) -> dict:
+    """Convert Pydantic JSON Schema to the closed-object form strict providers require."""
+    result = deepcopy(schema)
+
+    def close_objects(node) -> None:
+        if isinstance(node, dict):
+            node.pop("default", None)
+            properties = node.get("properties")
+            if isinstance(properties, dict):
+                node["additionalProperties"] = False
+                node["required"] = list(properties)
+            for value in node.values():
+                close_objects(value)
+        elif isinstance(node, list):
+            for value in node:
+                close_objects(value)
+
+    close_objects(result)
+    return result

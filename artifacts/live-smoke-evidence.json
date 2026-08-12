@@ -1,0 +1,27 @@
+{
+  "telegram": {
+    "configured": true,
+    "connected": true,
+    "bot_username": "NNNNNabbaBot"
+  },
+  "admin_chat": {
+    "configured": true,
+    "reachable": true
+  },
+  "providers": {
+    "groq": {
+      "configured": true,
+      "connected": true,
+      "model": "openai/gpt-oss-20b"
+    },
+    "openrouter": {
+      "configured": true,
+      "connected": true,
+      "model": "openrouter/free"
+    }
+  },
+  "live_search": {
+    "connected": true,
+    "result_count": 5
+  }
+}

@@ -64,11 +64,14 @@ Detailed credential and admin setup is in
 .venv\Scripts\python -m ruff check .
 .venv\Scripts\python -m pytest
 .venv\Scripts\python scripts\capstone_demo.py
+.venv\Scripts\python scripts\live_smoke_test.py
 ```
 
 The deterministic demo proves the successful path, a blocked indirect prompt-injection
 attack, the bounded re-search loop, an actual human interrupt, and resumption from the
 same SQLite checkpoint after rebuilding the graph. Evidence is written to `artifacts/`.
+The live smoke test checks Telegram, the administrator chat, each configured LLM provider,
+and live search without writing API keys to its evidence file.
 
 Start the service artifact separately if needed:
 
@@ -136,4 +139,3 @@ See [`docs/architecture.md`](docs/architecture.md),
 - `scripts/capstone_demo.py` — reproducible executed evidence.
 
 Built for the Advanced Agentic AI Systems Engineering capstone, August 2026 cohort.
-

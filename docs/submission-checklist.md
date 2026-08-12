@@ -16,5 +16,5 @@
 - [x] README includes setup, secrets, execution, architecture, and expected output.
 - [x] Git history is incremental and secrets/generated databases are ignored.
 - [x] Training attribution and SDAIA Academy link are present.
-- [ ] Insert real Telegram/Groq/OpenRouter secrets into local `.env`.
-- [ ] Capture final Telegram screenshots and live provider trace after secrets are configured.
+- [x] Configure and validate Telegram, administrator, Groq, OpenRouter, and live search.
+- [ ] Capture final Telegram interaction screenshots for the presentation.
