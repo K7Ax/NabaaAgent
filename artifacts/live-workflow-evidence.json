@@ -1,0 +1,26 @@
+{
+  "final_status": "verified",
+  "paused_for_human_review": false,
+  "search_attempts": 1,
+  "sources_examined": 0,
+  "title": "برنامج أساسيات أنظمة وكلاء الذكاء الاصطناعي",
+  "organization": "أكاديمية طويق",
+  "source_url": "https://tuwaiq.edu.sa/bootcamp/l6nbwBDp/view",
+  "verification": {
+    "status": "verified",
+    "score": 1.0,
+    "missing_fields": [],
+    "conflicts": [],
+    "reasons": [
+      "required_fields_have_evidence",
+      "verified_against_first_party_structured_data"
+    ],
+    "requires_human_review": false
+  },
+  "eligibility": {
+    "eligible": true,
+    "reasons": [
+      "eligible"
+    ]
+  }
+}

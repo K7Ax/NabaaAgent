@@ -15,6 +15,9 @@ evidence, eligibility matching, and human review control publication.
 - Two distinct agents: Discovery and independent Verification, coordinated through typed
   shared state.
 - Live web search and page retrieval with URL validation and private-network/SSRF blocking.
+- A first-party Tuwaiq connector reads the academy's public structured API for current
+  registration state, deadlines, cost, location, requirements, and application links;
+  general search is a fallback rather than the only discovery mechanism.
 - Structured LLM extraction and independent review through Groq, with automatic
   OpenRouter fallback on rate limits or provider failure.
 - Prompt-injection detection, Pydantic output validation, evidence requirements,

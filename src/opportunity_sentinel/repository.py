@@ -141,6 +141,7 @@ class Repository:
                 continue
             accepted = {major.casefold() for major in candidate.accepted_majors}
             broad = {"all technical majors", "technical majors", "جميع التخصصات التقنية"}
+            broad.update({"all majors", "all disciplines", "جميع التخصصات"})
             if (
                 accepted
                 and profile.major.casefold() not in accepted

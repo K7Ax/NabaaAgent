@@ -83,7 +83,7 @@ def test_missing_evidence_researches_then_interrupts(tmp_path: Path) -> None:
     paused = graph.invoke(
         {"thread_id": "review-1", "search_query": "internship Riyadh"}, config=config
     )
-    assert tools.search_calls == 2
+    assert tools.search_calls == 4
     assert paused["search_attempts"] == 2
     assert "__interrupt__" in paused
 

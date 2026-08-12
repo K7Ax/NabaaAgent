@@ -4,6 +4,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from typing import Any
+from urllib.parse import urlparse
 
 from opportunity_sentinel.llm import StructuredLLM
 from opportunity_sentinel.logging import logger
@@ -29,18 +30,44 @@ class DiscoveryAgent:
         self.llm = llm
 
     def discover(self, query: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        pages, search_observation = self.tools.search_web(query)
-        observations = [search_observation.model_dump(mode="json")]
+        if any(marker in query for marker in ("دورات", "معسكر", "course")):
+            queries = [f"{query} site:tuwaiq.edu.sa"]
+        else:
+            queries = [query, f"{query} site:hub.misk.org.sa"]
+        # DDGS uses its own internal concurrency and can stall when several instances run
+        # together. Keep searches bounded/sequential; page downloads remain parallel.
+        search_results = [self.tools.search_web(item) for item in queries]
+        observations = [
+            observation.model_dump(mode="json")
+            for _, observation in search_results
+        ]
+        unique_pages: dict[str, SourcePage] = {}
+        for pages, _ in search_results:
+            for page in pages:
+                unique_pages.setdefault(page.url, page)
+        pages = sorted(
+            unique_pages.values(),
+            key=lambda page: _search_result_score(page, query),
+            reverse=True,
+        )[:2]
         safe_pages: list[dict[str, Any]] = []
-        with ThreadPoolExecutor(max_workers=min(5, max(1, len(pages)))) as executor:
-            opened_results = executor.map(
-                self.tools.open_page,
-                (page.url for page in pages),
-            )
-        for opened, open_observation in opened_results:
-            observations.append(open_observation.model_dump(mode="json"))
-            if opened:
-                safe_pages.append(_page_to_dict(opened))
+        structured = [
+            page
+            for page in pages
+            if page.content.startswith("OPPORTUNITY_SENTINEL_STRUCTURED_SOURCE")
+        ]
+        safe_pages.extend(_page_to_dict(page) for page in structured)
+        web_pages = [page for page in pages if page not in structured]
+        if web_pages:
+            with ThreadPoolExecutor(max_workers=min(5, len(web_pages))) as executor:
+                opened_results = executor.map(
+                    self.tools.open_page,
+                    (page.url for page in web_pages),
+                )
+            for opened, open_observation in opened_results:
+                observations.append(open_observation.model_dump(mode="json"))
+                if opened:
+                    safe_pages.append(_page_to_dict(opened))
         safe_pages.sort(key=lambda item: item["official"], reverse=True)
         return safe_pages, observations
 
@@ -48,7 +75,7 @@ class DiscoveryAgent:
         page = SourcePage(**page_data)
         if not scan_untrusted_content(page.content).safe:
             return None
-        if self.llm:
+        if self.llm and not page.content.startswith("OPPORTUNITY_SENTINEL_STRUCTURED_SOURCE"):
             try:
                 return self._extract_with_llm(page)
             except (RuntimeError, ValueError) as exc:
@@ -67,6 +94,9 @@ class DiscoveryAgent:
         majors_match = re.search(r"majors:\s*([^\n]+)", page.content, re.I)
         years_match = re.search(r"graduation_years:\s*([^\n]+)", page.content, re.I)
         apply_match = re.search(r"apply:\s*(https?://\S+)", page.content, re.I)
+        registration_match = re.search(
+            r"registration_status:\s*(open|closed)", page.content, re.I
+        )
 
         required = [org_match, type_match, mode_match, apply_match]
         if not all(required):
@@ -78,6 +108,9 @@ class DiscoveryAgent:
             "city": city_match.group(1).strip() if city_match else None,
             "deadline": deadline_match.group(1) if deadline_match else None,
             "accepted_majors": majors_match.group(1).strip() if majors_match else None,
+            "registration_status": (
+                registration_match.group(1).strip() if registration_match else None
+            ),
         }
         for field_name, value in facts.items():
             if value:
@@ -108,6 +141,11 @@ class DiscoveryAgent:
                 else []
             ),
             deadline=date.fromisoformat(deadline_match.group(1)) if deadline_match else None,
+            registration_open=(
+                registration_match.group(1).casefold() == "open"
+                if registration_match
+                else None
+            ),
             application_url=apply_match.group(1),
             source_url=page.url,
             evidence=evidence,
@@ -120,7 +158,11 @@ class DiscoveryAgent:
             "Do not invent deadlines, eligibility, URLs, or locations. Evidence quotes must "
             "be short exact excerpts, source_url must be the supplied URL, and official_source "
             "must equal the supplied flag. Valid types: internship, coop, course. Valid modes: "
-            "in_person, online, hybrid. Return the required JSON schema only."
+            "in_person, online, hybrid. Set registration_open=true only if the page explicitly "
+            "states registration is open/currently available, and include evidence with "
+            "field_name=registration_status. Set it false if explicitly closed. If eligibility "
+            "is explicitly open to everyone, encode accepted_majors as ['جميع التخصصات'] with "
+            "direct evidence; never infer that from silence. Return the required JSON schema only."
         )
         user = (
             f"SOURCE_URL: {page.url}\nOFFICIAL_SOURCE: {page.official}\n"
@@ -152,8 +194,16 @@ class VerificationAgent:
             missing.append("organization_evidence")
         if candidate.delivery_mode != DeliveryMode.ONLINE and not candidate.evidence_for("city"):
             missing.append("city_evidence")
+        if candidate.registration_open is False:
+            return VerificationReport(
+                status=VerificationStatus.REJECTED,
+                score=0,
+                reasons=["registration_is_closed"],
+            )
         if candidate.deadline is None:
-            missing.append("deadline")
+            open_evidence = candidate.evidence_for("registration_status")
+            if candidate.registration_open is not True or not open_evidence:
+                missing.append("application_open_evidence")
         elif candidate.deadline < today:
             return VerificationReport(
                 status=VerificationStatus.REJECTED,
@@ -204,6 +254,15 @@ class VerificationAgent:
             score=score,
             reasons=["required_fields_have_evidence"],
         )
+        if _trusted_structured_candidate(candidate):
+            return VerificationReport(
+                status=VerificationStatus.VERIFIED,
+                score=score,
+                reasons=[
+                    *deterministic.reasons,
+                    "verified_against_first_party_structured_data",
+                ],
+            )
         return self._independent_llm_review(candidate, deterministic) if self.llm else deterministic
 
     def _independent_llm_review(
@@ -246,6 +305,9 @@ class EligibilityMatcher:
         "computer related majors",
         "جميع التخصصات التقنية",
         "التخصصات التقنية",
+        "all majors",
+        "all disciplines",
+        "جميع التخصصات",
     }
 
     def match(
@@ -279,3 +341,46 @@ def _page_to_dict(page: SourcePage) -> dict[str, Any]:
         "content": page.content,
         "official": page.official,
     }
+
+
+def _search_result_score(page: SourcePage, query: str) -> int:
+    text = f"{page.title} {page.content}".casefold()
+    title = page.title.casefold()
+    host = (urlparse(page.url).hostname or "").casefold()
+    terms = {term.casefold() for term in query.split() if len(term) > 3}
+    score = 100 if page.official else 0
+    if host == "tuwaiq.edu.sa" or host.endswith(".tuwaiq.edu.sa"):
+        score += 250
+    elif host == "hub.misk.org.sa" or host.endswith(".hub.misk.org.sa"):
+        score += 220
+    elif host in {"spa.gov.sa", "www.spa.gov.sa", "riyadh.sa", "www.riyadh.sa"}:
+        score += 160
+    score += 35 * sum(
+        marker in title for marker in ("معسكر", "برنامج", "دورة", "تدريب", "bootcamp")
+    )
+    score += 8 * len(terms.intersection(text.split()))
+    score += 25 * sum(
+        marker in text
+        for marker in (
+            "التسجيل مفتوح",
+            "فتح باب التسجيل",
+            "حالة التسجيل",
+            "رابط التسجيل",
+            "apply now",
+        )
+    )
+    score += 15 if str(date.today().year) in text else 0
+    return score
+
+
+def _trusted_structured_candidate(candidate: OpportunityCandidate) -> bool:
+    host = (urlparse(str(candidate.source_url)).hostname or "").casefold()
+    required_evidence = {"organization", "city", "deadline", "accepted_majors"}
+    evidenced = {
+        item.field_name for item in candidate.evidence if item.official_source
+    }
+    return (
+        host == "tuwaiq.edu.sa"
+        and candidate.registration_open is True
+        and required_evidence.issubset(evidenced)
+    )

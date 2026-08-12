@@ -43,6 +43,7 @@ class OpportunityCandidate(BaseModel):
     accepted_majors: list[str] = Field(default_factory=list)
     accepted_graduation_years: list[int] = Field(default_factory=list)
     deadline: date | None = None
+    registration_open: bool | None = None
     application_url: HttpUrl
     source_url: HttpUrl
     evidence: list[Evidence] = Field(default_factory=list)

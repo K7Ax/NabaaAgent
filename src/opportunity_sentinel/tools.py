@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from datetime import date, datetime
 from ipaddress import ip_address
 from socket import getaddrinfo
 from typing import Protocol
@@ -80,10 +81,12 @@ class WebResearchTools:
         )
 
     def search_web(self, query: str) -> tuple[list[SourcePage], ToolObservation]:
+        if "site:tuwaiq.edu.sa" in query.casefold():
+            return self._search_tuwaiq(query)
         started = time.perf_counter()
         try:
             results = list(
-                DDGS(timeout=int(self.client.timeout.read)).text(
+                DDGS(timeout=min(8, int(self.client.timeout.read))).text(
                     query, max_results=self.max_results
                 )
             )
@@ -111,6 +114,83 @@ class WebResearchTools:
             detail=detail,
             latency_ms=elapsed,
             metadata={"query": query, "result_count": len(pages)},
+        )
+
+    def _search_tuwaiq(self, query: str) -> tuple[list[SourcePage], ToolObservation]:
+        """Use Tuwaiq's public first-party API instead of unreliable search snippets."""
+        started = time.perf_counter()
+        pages: list[SourcePage] = []
+        try:
+            response = self.client.get(
+                "https://tuwaiq.edu.sa/api/GetInitiativePublishesShorten/20/1?type=NORMAL"
+            )
+            response.raise_for_status()
+            rows = response.json().get("data", [])
+            eligible_rows = [
+                row
+                for row in rows
+                if row.get("isOpen")
+                and row.get("isRegistrationOpen")
+                and not row.get("isRegistrationClosed")
+                and not row.get("isPaid")
+                and _future_or_today(row.get("registrationEndDate"))
+            ]
+            eligible_rows.sort(
+                key=lambda row: _tuwaiq_relevance(row, query),
+                reverse=True,
+            )
+            for row in eligible_rows[: self.max_results]:
+                slug = row.get("slug")
+                if not slug:
+                    continue
+                detail_response = self.client.get(
+                    f"https://tuwaiq.edu.sa/api/GetInitiativePublishBySlug/{slug}"
+                )
+                detail_response.raise_for_status()
+                detail = detail_response.json()
+                majors = _majors_from_requirements(detail.get("requirements") or [])
+                city, mode = _location_from_tuwaiq(detail)
+                deadline = (detail.get("registrationEndDate") or "")[:10]
+                application_url = f"https://tuwaiq.edu.sa/bootcamp/{slug}/view"
+                content = (
+                    "OPPORTUNITY_SENTINEL_STRUCTURED_SOURCE\n"
+                    "organization: أكاديمية طويق\n"
+                    "type: course\n"
+                    f"city: {city}\n"
+                    f"mode: {mode}\n"
+                    f"majors: {majors}\n"
+                    f"deadline: {deadline}\n"
+                    "registration_status: open\n"
+                    f"apply: {application_url}\n"
+                    "requirements: "
+                    + " | ".join(detail.get("requirements") or [])
+                )
+                pages.append(
+                    SourcePage(
+                        url=application_url,
+                        title=detail.get("title") or row.get("title") or "برنامج تقني",
+                        content=content,
+                        official=True,
+                    )
+                )
+            success = True
+            detail_text = f"Found {len(pages)} open free programs from Tuwaiq official API"
+        except (httpx.HTTPError, ValueError, KeyError) as exc:
+            success = False
+            detail_text = f"Tuwaiq API failed: {type(exc).__name__}"
+        elapsed = (time.perf_counter() - started) * 1000
+        logger.info(
+            "tool_call",
+            tool="tuwaiq_official_api",
+            success=success,
+            latency_ms=elapsed,
+        )
+        return pages, ToolObservation(
+            tool="tuwaiq_official_api",
+            success=success,
+            detail=detail_text,
+            latency_ms=elapsed,
+            metadata={"result_count": len(pages), "source": "tuwaiq.edu.sa"},
         )
 
     def open_page(self, url: str) -> tuple[SourcePage | None, ToolObservation]:
@@ -155,7 +235,11 @@ class WebResearchTools:
             detail = f"Page failed: {type(exc).__name__}: {exc}"
         elapsed = (time.perf_counter() - started) * 1000
         logger.info(
-            "tool_call", tool="open_page", success=page is not None, latency_ms=elapsed, url=url
+            "tool_call",
+            tool="open_page",
+            success=page is not None,
+            latency_ms=elapsed,
+            url=_ascii_safe(url),
         )
         return page, ToolObservation(
             tool="open_page",
@@ -193,4 +277,59 @@ def _is_public_address(address: str) -> bool:
 
 def _looks_official(url: str) -> bool:
     host = (urlparse(url).hostname or "").casefold()
-    return host.endswith(".gov.sa") or host.endswith(".edu.sa") or host.endswith(".org.sa")
+    trusted_exact = {"riyadh.sa", "www.riyadh.sa", "spa.gov.sa", "www.spa.gov.sa"}
+    return (
+        host in trusted_exact
+        or host.endswith(".gov.sa")
+        or host.endswith(".edu.sa")
+        or host.endswith(".org.sa")
+    )
+
+
+def _ascii_safe(value: str) -> str:
+    return value.encode("ascii", "backslashreplace").decode("ascii")
+
+
+def _future_or_today(value: str | None) -> bool:
+    if not value:
+        return False
+    try:
+        return datetime.fromisoformat(value).date() >= date.today()
+    except ValueError:
+        return False
+
+
+def _tuwaiq_relevance(row: dict, query: str) -> int:
+    text = " ".join(
+        str(row.get(field) or "")
+        for field in ("title", "initiativeScopeName", "initiativeCategoryName")
+    ).casefold()
+    terms = {term.casefold() for term in query.split() if len(term) > 3}
+    technical = (
+        "البرمجيات",
+        "الذكاء الاصطناعي",
+        "الحوسبة",
+        "الأمن السيبراني",
+        "تقني",
+        "بيانات",
+        "برمجة",
+    )
+    return 10 * len(terms.intersection(text.split())) + 20 * sum(x in text for x in technical)
+
+
+def _majors_from_requirements(requirements: list[str]) -> str:
+    joined = " ".join(requirements).casefold()
+    if "تخصص تقني" in joined or "التخصصات التقنية" in joined:
+        return "التخصصات التقنية"
+    return ""
+
+
+def _location_from_tuwaiq(detail: dict) -> tuple[str, str]:
+    location = str(detail.get("locationName") or detail.get("locationText") or "")
+    if not location:
+        return "عن بعد", "online"
+    if "عن بعد" in location and "الرياض" in location:
+        return "الرياض", "hybrid"
+    if "عن بعد" in location:
+        return "عن بعد", "online"
+    return "الرياض" if "الرياض" in location else location, "in_person"

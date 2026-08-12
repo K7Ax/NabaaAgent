@@ -346,9 +346,24 @@ def user_id_from_thread(thread_id: str) -> int | None:
 
 def _initial_state(thread_id: str, profile: StudentProfile) -> dict:
     preferred = " ".join(TYPE_LABELS[item] for item in profile.preferred_types)
+    month_names = [
+        "يناير",
+        "فبراير",
+        "مارس",
+        "أبريل",
+        "مايو",
+        "يونيو",
+        "يوليو",
+        "أغسطس",
+        "سبتمبر",
+        "أكتوبر",
+        "نوفمبر",
+        "ديسمبر",
+    ]
+    today = date.today()
     query = (
-        f"{preferred} {profile.major} طلاب الرياض 2026 التقديم مفتوح "
-        "site:gov.sa OR site:edu.sa OR site:org.sa"
+        f"{preferred} {profile.major} طلاب الرياض "
+        f"{month_names[today.month - 1]} {today.year} التسجيل مفتوح"
     )
     return {
         "thread_id": thread_id,
@@ -359,7 +374,11 @@ def _initial_state(thread_id: str, profile: StudentProfile) -> dict:
 
 
 def opportunity_text(candidate: OpportunityCandidate) -> str:
-    deadline = candidate.deadline.isoformat() if candidate.deadline else "غير معلن"
+    deadline = (
+        candidate.deadline.isoformat()
+        if candidate.deadline
+        else "مفتوح وفق الصفحة الرسمية"
+    )
     majors = "، ".join(candidate.accepted_majors) or "غير محددة"
     return (
         f"🎯 <b>{html.escape(candidate.title)}</b>\n\n"

@@ -1,7 +1,7 @@
 import httpx
 
 import opportunity_sentinel.tools as tools_module
-from opportunity_sentinel.tools import WebResearchTools, _is_public_address
+from opportunity_sentinel.tools import WebResearchTools, _is_public_address, _looks_official
 
 
 def test_non_public_address_classes_are_blocked() -> None:
@@ -10,6 +10,13 @@ def test_non_public_address_classes_are_blocked() -> None:
     assert _is_public_address("10.0.0.1") is False
     assert _is_public_address("169.254.1.1") is False
     assert _is_public_address("::1") is False
+
+
+def test_trusted_saudi_opportunity_sources_are_recognized() -> None:
+    assert _looks_official("https://tuwaiq.edu.sa/bootcamp/example") is True
+    assert _looks_official("https://hub.misk.org.sa/ar/programs/skills/example") is True
+    assert _looks_official("https://riyadh.sa/ar/article/example") is True
+    assert _looks_official("https://untrusted.example/opportunity") is False
 
 
 def test_redirect_to_private_network_is_not_followed(monkeypatch) -> None:

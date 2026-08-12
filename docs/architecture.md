@@ -39,6 +39,9 @@ flowchart TD
 
 `WebResearchTools` performs live search, checks URLs against private-network/SSRF risks,
 downloads source pages, and returns structured observations with latency and metadata.
+For Tuwaiq programs it uses the academy's public first-party API and applies deterministic
+validation to explicit structured fields, avoiding search-index staleness and unnecessary
+LLM interpretation.
 `InMemoryResearchTools` implements the same interface for repeatable security and
 evaluation runs. The discovery agent uses Groq first and falls back to OpenRouter when a
 provider is unavailable or rate limited.
