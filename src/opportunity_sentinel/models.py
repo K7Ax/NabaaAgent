@@ -41,6 +41,7 @@ class OpportunityCandidate(BaseModel):
     city: str | None = None
     delivery_mode: DeliveryMode
     accepted_majors: list[str] = Field(default_factory=list)
+    accepted_graduation_years: list[int] = Field(default_factory=list)
     deadline: date | None = None
     application_url: HttpUrl
     source_url: HttpUrl
@@ -71,6 +72,11 @@ class StudentProfile(BaseModel):
     graduation_year: int
     preferred_types: set[OpportunityType] = Field(default_factory=set)
     accepts_online: bool = True
+
+
+class EligibilityDecision(BaseModel):
+    eligible: bool
+    reasons: list[str] = Field(default_factory=list)
 
 
 class ToolObservation(BaseModel):

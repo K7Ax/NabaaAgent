@@ -1,0 +1,20 @@
+# 100-point submission checklist
+
+- [x] ReAct pattern is named, implemented, and documented.
+- [x] Real search/open tools use explicit interfaces and structured observations.
+- [x] Short-term state persists between graph nodes.
+- [x] LangGraph StateGraph has nodes, edges, branching, and a terminating loop.
+- [x] Discovery and Verification Agents have distinct prompts and responsibilities.
+- [x] Central coordination occurs through LangGraph shared state.
+- [x] A real indirect prompt-injection attempt is blocked and captured.
+- [x] Output/data guardrails validate evidence, dates, location, and eligibility.
+- [x] Structured logs capture tools, latency, routing, fallback, failures, and HITL.
+- [x] SQLite checkpoint survives graph reconstruction and resumes by thread ID.
+- [x] Human approval interrupts and resumes with approve/reject/research actions.
+- [x] Dockerfile, Compose, persistent volume, FastAPI health/readiness, and bot service exist.
+- [x] Automated test, coverage, and executed demo artifacts are captured.
+- [x] README includes setup, secrets, execution, architecture, and expected output.
+- [x] Git history is incremental and secrets/generated databases are ignored.
+- [x] Training attribution and SDAIA Academy link are present.
+- [ ] Insert real Telegram/Groq/OpenRouter secrets into local `.env`.
+- [ ] Capture final Telegram screenshots and live provider trace after secrets are configured.

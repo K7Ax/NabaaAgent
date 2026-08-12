@@ -1,0 +1,51 @@
+{
+  "agentic_pattern": "ReAct",
+  "graph": {
+    "nodes": [
+      "discover",
+      "sanitize",
+      "extract",
+      "verify",
+      "eligibility",
+      "approval",
+      "publish",
+      "reject"
+    ],
+    "conditional_loop_proven": true
+  },
+  "happy_path": {
+    "final_status": "verified",
+    "tool_observations": 2,
+    "verification": {
+      "status": "verified",
+      "score": 1.0,
+      "missing_fields": [],
+      "conflicts": [],
+      "reasons": [
+        "required_fields_have_evidence"
+      ],
+      "requires_human_review": false
+    }
+  },
+  "security_path": {
+    "final_status": "rejected",
+    "errors": [
+      "prompt_injection_blocked"
+    ],
+    "attack_blocked": true
+  },
+  "hitl_path": {
+    "paused": true,
+    "search_attempts": 2,
+    "resumed_after_graph_rebuild": true,
+    "final_status": "rejected"
+  },
+  "provider_resilience": {
+    "providers_called": [
+      "primary.demo",
+      "fallback.demo"
+    ],
+    "fallback_used": true,
+    "result_status": "verified"
+  }
+}

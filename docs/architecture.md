@@ -15,11 +15,13 @@ flowchart TD
     G -->|safe| E[Structured extraction]
     G -->|blocked| X[Reject]
     E --> V[Verification Agent]
-    V -->|complete evidence| P[Publish]
+    V -->|complete evidence| M[Eligibility Matcher]
+    M -->|student matches| P[Publish]
+    M -->|student does not match| X
     V -->|missing evidence and attempts remain| D
     V -->|uncertain or attempts exhausted| H[Human review interrupt]
     V -->|expired or out of scope| X
-    H -->|approve| P
+    H -->|approve| M
     H -->|research again| D
     H -->|reject| X
 ```
@@ -33,12 +35,13 @@ flowchart TD
 - **LangGraph coordinator:** Owns routing, bounded retries, shared state, checkpointing,
   and the human approval interrupt.
 
-## Current tools
+## Tool adapters
 
-`InMemoryResearchTools` is the deterministic baseline used for repeatable development,
-security demonstrations, and evaluation. Its interface is intentionally identical to the
-future live search adapter: `search_web` and `open_page` both return structured tool
-observations including success, latency, and metadata.
+`WebResearchTools` performs live search, checks URLs against private-network/SSRF risks,
+downloads source pages, and returns structured observations with latency and metadata.
+`InMemoryResearchTools` implements the same interface for repeatable security and
+evaluation runs. The discovery agent uses Groq first and falls back to OpenRouter when a
+provider is unavailable or rate limited.
 
 ## Persistence and human review
 
@@ -54,8 +57,10 @@ The process can later resume with `Command(resume=...)` using the same `thread_i
 - Bound research attempts to prevent uncontrolled loops and token consumption.
 - Keep provider and Telegram secrets in environment variables excluded by `.gitignore`.
 
-## Planned adapters
+## Delivery and application state
 
-The next milestones add live search, Groq/OpenRouter structured extraction, Telegram
-inline keyboards, persistent opportunity/user storage, richer traces, and evaluation
-datasets without changing the graph's public state contract.
+The Telegram adapter identifies users by their Telegram account ID. Onboarding, search,
+profile editing, saving, applying, and human-review decisions use inline buttons. A
+separate SQLite repository stores student profiles, verified opportunities, saved items,
+and delivery records. URL-derived identifiers suppress duplicate notifications. A
+scheduled loop repeats discovery for registered students and sends only unseen matches.

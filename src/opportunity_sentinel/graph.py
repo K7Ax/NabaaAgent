@@ -8,8 +8,15 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
-from opportunity_sentinel.agents import DiscoveryAgent, VerificationAgent
-from opportunity_sentinel.models import OpportunityCandidate, VerificationReport, VerificationStatus
+from opportunity_sentinel.agents import DiscoveryAgent, EligibilityMatcher, VerificationAgent
+from opportunity_sentinel.logging import logger
+from opportunity_sentinel.models import (
+    EligibilityDecision,
+    OpportunityCandidate,
+    StudentProfile,
+    VerificationReport,
+    VerificationStatus,
+)
 from opportunity_sentinel.security import scan_untrusted_content
 from opportunity_sentinel.state import OpportunityState
 
@@ -22,6 +29,7 @@ def build_graph(
 ):
     connection = sqlite3.connect(checkpoint_path, check_same_thread=False)
     checkpointer = SqliteSaver(connection)
+    eligibility_matcher = EligibilityMatcher()
 
     def discover(state: OpportunityState) -> dict:
         attempt = state.get("search_attempts", 0) + 1
@@ -30,6 +38,7 @@ def build_graph(
             missing = state["verification"].get("missing_fields", [])
             query = f"{query} official {' '.join(missing)}"
         pages, observations = discovery_agent.discover(query)
+        logger.info("graph_node", node="discover", attempt=attempt, pages=len(pages))
         return {
             "search_attempts": attempt,
             "candidate_pages": pages,
@@ -40,10 +49,27 @@ def build_graph(
         pages = state.get("candidate_pages", [])
         if not pages:
             return {"current_page": None, "errors": ["no_candidate_pages"]}
+        safe_pages = []
         for page in pages:
             scan = scan_untrusted_content(page["content"])
             if scan.safe:
-                return {"current_page": page}
+                safe_pages.append(page)
+            else:
+                logger.warning(
+                    "security_guardrail",
+                    attack="indirect_prompt_injection",
+                    blocked=True,
+                    source_url=page.get("url"),
+                )
+        if safe_pages:
+            logger.info(
+                "graph_node",
+                node="sanitize",
+                result="safe",
+                safe_pages=len(safe_pages),
+            )
+            return {"candidate_pages": safe_pages, "current_page": safe_pages[0]}
+        logger.warning("security_guardrail", attack="indirect_prompt_injection", blocked=True)
         return {
             "current_page": None,
             "errors": ["prompt_injection_blocked"],
@@ -51,25 +77,39 @@ def build_graph(
         }
 
     def extract(state: OpportunityState) -> dict:
-        page = state.get("current_page")
-        if not page:
+        pages = state.get("candidate_pages", [])
+        if not pages:
             return {"candidate": None}
-        candidate = discovery_agent.extract(page)
-        return {"candidate": candidate.model_dump(mode="json") if candidate else None}
+        candidate = None
+        selected_page = None
+        for page in pages:
+            candidate = discovery_agent.extract(page)
+            if candidate:
+                selected_page = page
+                break
+        logger.info("graph_node", node="extract", success=candidate is not None)
+        return {
+            "candidate": candidate.model_dump(mode="json") if candidate else None,
+            "current_page": selected_page,
+        }
 
     def verify(state: OpportunityState) -> dict:
         candidate_data = state.get("candidate")
         if not candidate_data:
             report = VerificationReport(
-                status=VerificationStatus.REJECTED,
+                status=VerificationStatus.NEEDS_RESEARCH,
                 score=0,
+                missing_fields=["extractable_candidate"],
                 reasons=["candidate_extraction_failed"],
             )
         else:
             report = verification_agent.verify(OpportunityCandidate.model_validate(candidate_data))
+        logger.info(
+            "graph_node", node="verify", status=report.status.value, score=report.score
+        )
         return {"verification": report.model_dump(mode="json")}
 
-    def approval(state: OpportunityState) -> Command[Literal["publish", "reject", "discover"]]:
+    def approval(state: OpportunityState) -> Command[Literal["eligibility", "reject", "discover"]]:
         response = interrupt(
             {
                 "kind": "opportunity_review",
@@ -79,16 +119,30 @@ def build_graph(
             }
         )
         decision = response.get("decision") if isinstance(response, dict) else response
-        routes = {"approve": "publish", "reject": "reject", "research_again": "discover"}
+        logger.info("human_review_resumed", decision=decision)
+        routes = {"approve": "eligibility", "reject": "reject", "research_again": "discover"}
         return Command(
             update={"human_decision": str(decision)},
             goto=routes.get(decision, "reject"),
         )
 
+    def eligibility(state: OpportunityState) -> dict:
+        profile_data = state.get("student_profile")
+        if not profile_data:
+            return {"eligibility": EligibilityDecision(eligible=True).model_dump(mode="json")}
+        decision = eligibility_matcher.match(
+            OpportunityCandidate.model_validate(state["candidate"]),
+            StudentProfile.model_validate(profile_data),
+        )
+        logger.info("graph_node", node="eligibility", eligible=decision.eligible)
+        return {"eligibility": decision.model_dump(mode="json")}
+
     def publish(_: OpportunityState) -> dict:
+        logger.info("graph_node", node="publish", status="verified")
         return {"final_status": VerificationStatus.VERIFIED.value}
 
     def reject(state: OpportunityState) -> dict:
+        logger.info("graph_node", node="reject", status="rejected")
         return {"final_status": state.get("final_status") or VerificationStatus.REJECTED.value}
 
     def after_sanitize(state: OpportunityState) -> str:
@@ -97,7 +151,7 @@ def build_graph(
     def after_verify(state: OpportunityState) -> str:
         report = VerificationReport.model_validate(state["verification"])
         if report.status == VerificationStatus.VERIFIED:
-            return "publish"
+            return "eligibility"
         if report.status == VerificationStatus.REJECTED:
             return "reject"
         if (
@@ -107,12 +161,17 @@ def build_graph(
             return "discover"
         return "approval"
 
+    def after_eligibility(state: OpportunityState) -> str:
+        decision = EligibilityDecision.model_validate(state["eligibility"])
+        return "publish" if decision.eligible else "reject"
+
     builder = StateGraph(OpportunityState)
     builder.add_node("discover", discover)
     builder.add_node("sanitize", sanitize)
     builder.add_node("extract", extract)
     builder.add_node("verify", verify)
     builder.add_node("approval", approval)
+    builder.add_node("eligibility", eligibility)
     builder.add_node("publish", publish)
     builder.add_node("reject", reject)
     builder.add_edge(START, "discover")
@@ -120,8 +179,9 @@ def build_graph(
     builder.add_conditional_edges("sanitize", after_sanitize, ["extract", "reject"])
     builder.add_edge("extract", "verify")
     builder.add_conditional_edges(
-        "verify", after_verify, ["publish", "reject", "discover", "approval"]
+        "verify", after_verify, ["eligibility", "reject", "discover", "approval"]
     )
+    builder.add_conditional_edges("eligibility", after_eligibility, ["publish", "reject"])
     builder.add_edge("publish", END)
     builder.add_edge("reject", END)
     return builder.compile(checkpointer=checkpointer)

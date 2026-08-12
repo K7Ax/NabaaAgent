@@ -4,7 +4,7 @@ from langgraph.types import Command
 
 from opportunity_sentinel.agents import DiscoveryAgent, VerificationAgent
 from opportunity_sentinel.graph import build_graph, thread_config
-from opportunity_sentinel.models import VerificationStatus
+from opportunity_sentinel.models import OpportunityType, StudentProfile, VerificationStatus
 from opportunity_sentinel.tools import InMemoryResearchTools, SourcePage
 
 
@@ -28,6 +28,25 @@ def test_graph_publishes_verified_candidate(tmp_path: Path, verified_page: Sourc
     assert result["final_status"] == VerificationStatus.VERIFIED.value
     assert result["search_attempts"] == 1
     assert len(result["observations"]) >= 2
+
+
+def test_graph_skips_unextractable_page_and_uses_next_result(
+    tmp_path: Path,
+    verified_page: SourcePage,
+) -> None:
+    irrelevant = SourcePage(
+        url="https://official.example/home",
+        title="Organization home page",
+        official=True,
+        content="General organization information without an opportunity.",
+    )
+    graph, _ = _graph(tmp_path, [irrelevant, verified_page])
+    result = graph.invoke(
+        {"thread_id": "multi-page-1", "search_query": "unused"},
+        config=thread_config("multi-page-1"),
+    )
+    assert result["final_status"] == VerificationStatus.VERIFIED.value
+    assert result["candidate"]["source_url"] == verified_page.url
 
 
 def test_graph_blocks_indirect_prompt_injection(tmp_path: Path) -> None:
@@ -71,3 +90,26 @@ def test_missing_evidence_researches_then_interrupts(tmp_path: Path) -> None:
     final = graph.invoke(Command(resume={"decision": "reject"}), config=config)
     assert final["final_status"] == VerificationStatus.REJECTED.value
     assert final["human_decision"] == "reject"
+
+
+def test_graph_rejects_verified_but_ineligible_student(
+    tmp_path: Path, verified_page: SourcePage
+) -> None:
+    graph, _ = _graph(tmp_path, [verified_page])
+    profile = StudentProfile(
+        telegram_id=99,
+        major="Cybersecurity",
+        graduation_year=2027,
+        preferred_types={OpportunityType.COOP},
+    )
+    result = graph.invoke(
+        {
+            "thread_id": "eligibility-1",
+            "search_query": "coop Riyadh",
+            "student_profile": profile.model_dump(mode="json"),
+        },
+        config=thread_config("eligibility-1"),
+    )
+    assert result["final_status"] == VerificationStatus.REJECTED.value
+    assert result["eligibility"]["eligible"] is False
+    assert "student_major_not_accepted" in result["eligibility"]["reasons"]
