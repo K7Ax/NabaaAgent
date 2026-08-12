@@ -1,0 +1,131 @@
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+from typing import Literal
+
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, interrupt
+
+from opportunity_sentinel.agents import DiscoveryAgent, VerificationAgent
+from opportunity_sentinel.models import OpportunityCandidate, VerificationReport, VerificationStatus
+from opportunity_sentinel.security import scan_untrusted_content
+from opportunity_sentinel.state import OpportunityState
+
+
+def build_graph(
+    discovery_agent: DiscoveryAgent,
+    verification_agent: VerificationAgent,
+    checkpoint_path: Path,
+    max_research_attempts: int = 2,
+):
+    connection = sqlite3.connect(checkpoint_path, check_same_thread=False)
+    checkpointer = SqliteSaver(connection)
+
+    def discover(state: OpportunityState) -> dict:
+        attempt = state.get("search_attempts", 0) + 1
+        query = state["search_query"]
+        if state.get("verification"):
+            missing = state["verification"].get("missing_fields", [])
+            query = f"{query} official {' '.join(missing)}"
+        pages, observations = discovery_agent.discover(query)
+        return {
+            "search_attempts": attempt,
+            "candidate_pages": pages,
+            "observations": observations,
+        }
+
+    def sanitize(state: OpportunityState) -> dict:
+        pages = state.get("candidate_pages", [])
+        if not pages:
+            return {"current_page": None, "errors": ["no_candidate_pages"]}
+        for page in pages:
+            scan = scan_untrusted_content(page["content"])
+            if scan.safe:
+                return {"current_page": page}
+        return {
+            "current_page": None,
+            "errors": ["prompt_injection_blocked"],
+            "final_status": VerificationStatus.REJECTED.value,
+        }
+
+    def extract(state: OpportunityState) -> dict:
+        page = state.get("current_page")
+        if not page:
+            return {"candidate": None}
+        candidate = discovery_agent.extract(page)
+        return {"candidate": candidate.model_dump(mode="json") if candidate else None}
+
+    def verify(state: OpportunityState) -> dict:
+        candidate_data = state.get("candidate")
+        if not candidate_data:
+            report = VerificationReport(
+                status=VerificationStatus.REJECTED,
+                score=0,
+                reasons=["candidate_extraction_failed"],
+            )
+        else:
+            report = verification_agent.verify(OpportunityCandidate.model_validate(candidate_data))
+        return {"verification": report.model_dump(mode="json")}
+
+    def approval(state: OpportunityState) -> Command[Literal["publish", "reject", "discover"]]:
+        response = interrupt(
+            {
+                "kind": "opportunity_review",
+                "candidate": state.get("candidate"),
+                "verification": state.get("verification"),
+                "allowed_decisions": ["approve", "reject", "research_again"],
+            }
+        )
+        decision = response.get("decision") if isinstance(response, dict) else response
+        routes = {"approve": "publish", "reject": "reject", "research_again": "discover"}
+        return Command(
+            update={"human_decision": str(decision)},
+            goto=routes.get(decision, "reject"),
+        )
+
+    def publish(_: OpportunityState) -> dict:
+        return {"final_status": VerificationStatus.VERIFIED.value}
+
+    def reject(state: OpportunityState) -> dict:
+        return {"final_status": state.get("final_status") or VerificationStatus.REJECTED.value}
+
+    def after_sanitize(state: OpportunityState) -> str:
+        return "extract" if state.get("current_page") else "reject"
+
+    def after_verify(state: OpportunityState) -> str:
+        report = VerificationReport.model_validate(state["verification"])
+        if report.status == VerificationStatus.VERIFIED:
+            return "publish"
+        if report.status == VerificationStatus.REJECTED:
+            return "reject"
+        if (
+            report.status == VerificationStatus.NEEDS_RESEARCH
+            and state.get("search_attempts", 0) < max_research_attempts
+        ):
+            return "discover"
+        return "approval"
+
+    builder = StateGraph(OpportunityState)
+    builder.add_node("discover", discover)
+    builder.add_node("sanitize", sanitize)
+    builder.add_node("extract", extract)
+    builder.add_node("verify", verify)
+    builder.add_node("approval", approval)
+    builder.add_node("publish", publish)
+    builder.add_node("reject", reject)
+    builder.add_edge(START, "discover")
+    builder.add_edge("discover", "sanitize")
+    builder.add_conditional_edges("sanitize", after_sanitize, ["extract", "reject"])
+    builder.add_edge("extract", "verify")
+    builder.add_conditional_edges(
+        "verify", after_verify, ["publish", "reject", "discover", "approval"]
+    )
+    builder.add_edge("publish", END)
+    builder.add_edge("reject", END)
+    return builder.compile(checkpointer=checkpointer)
+
+
+def thread_config(thread_id: str) -> dict:
+    return {"configurable": {"thread_id": thread_id}}

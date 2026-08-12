@@ -1,0 +1,19 @@
+services:
+  api:
+    build: .
+    environment:
+      APP_ENV: production
+      CHECKPOINT_DB_PATH: /app/data/opportunity_checkpoints.sqlite
+    ports:
+      - "8000:8000"
+    volumes:
+      - opportunity_data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  opportunity_data:
+
