@@ -52,7 +52,7 @@ clean Ruff output, and a successful executed capstone proof script.
 | Secrets and generated databases excluded | Complete through `.gitignore` and `.dockerignore`. |
 | Program attribution and SDAIA GitHub link | Complete in README. |
 | Automated GitHub evaluation | `.github/workflows/quality.yml` runs Ruff, 24 tests, a 70% coverage gate, the capstone evidence script, and uploads proof artifacts without secrets. |
-| Published and continuously updated GitHub repository | Pending until the audited commit is pushed to public `K7Ax/NabaaAgent`. |
+| Published and continuously updated GitHub repository | Complete: public `K7Ax/NabaaAgent`, incremental history, and successful GitHub Quality Gate run `31634713737`. |
 
 ## Executed proof map
 

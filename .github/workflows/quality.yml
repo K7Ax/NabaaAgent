@@ -17,10 +17,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -45,7 +45,7 @@ jobs:
 
       - name: Upload evaluator evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: capstone-evidence-${{ github.sha }}
           path: |
@@ -53,4 +53,3 @@ jobs:
             artifacts/coverage.xml
             artifacts/capstone-evidence.json
           if-no-files-found: error
-

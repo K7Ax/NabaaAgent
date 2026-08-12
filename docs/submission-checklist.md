@@ -20,6 +20,6 @@
 - [x] Map every scored requirement to executed repository evidence.
 - [x] Add a secret-free GitHub Actions quality gate with coverage and evidence artifacts.
 - [x] Run the exact quality gate locally: 28 tests, 70.57% coverage, Ruff and capstone proof pass.
-- [ ] Publish the audited commit to public `K7Ax/NabaaAgent` (mandatory PDF requirement).
-- [ ] Confirm the GitHub Actions quality gate is green on the published commit.
+- [x] Publish the audited commit to public `K7Ax/NabaaAgent` (mandatory PDF requirement).
+- [x] Confirm the GitHub Actions quality gate is green on the published commit.
 - [ ] Capture final Telegram interaction screenshots for the presentation.

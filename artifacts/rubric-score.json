@@ -21,6 +21,12 @@
     "ruff": "passed",
     "capstone_proof_script": "passed"
   },
-  "submission_complete": false,
-  "submission_blocker": "Public GitHub push and green GitHub Actions run are still pending"
+  "github": {
+    "repository": "https://github.com/K7Ax/NabaaAgent",
+    "visibility": "public",
+    "quality_gate_run": "https://github.com/K7Ax/NabaaAgent/actions/runs/31634713737",
+    "quality_gate_conclusion": "success"
+  },
+  "submission_complete": true,
+  "submission_blocker": null
 }
