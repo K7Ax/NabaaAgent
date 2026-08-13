@@ -135,7 +135,7 @@ def _fast_candidates() -> tuple[dict[str, dict], dict[str, dict[str, object]]]:
     source_reports: dict[str, dict[str, object]] = {}
 
     try:
-        pages, _ = tools.search_web("برامج مفتوحة site:tuwaiq.edu.sa")
+        pages, observation = tools.search_web("برامج مفتوحة site:tuwaiq.edu.sa")
         verified = 0
         for page in pages:
             candidate = discovery.extract(page.__dict__)
@@ -145,7 +145,11 @@ def _fast_candidates() -> tuple[dict[str, dict], dict[str, dict[str, object]]]:
             if report.status == VerificationStatus.VERIFIED:
                 candidates[str(candidate.application_url)] = candidate.model_dump(mode="json")
                 verified += 1
-        source_reports["tuwaiq"] = {"discovered": len(pages), "verified": verified}
+        source_reports["tuwaiq"] = {
+            "discovered": len(pages),
+            "verified": verified,
+            **({"error": observation.detail} if not observation.success else {}),
+        }
     except Exception as exc:
         source_reports["tuwaiq"] = {"discovered": 0, "verified": 0, "error": str(exc)}
 

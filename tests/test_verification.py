@@ -76,6 +76,44 @@ def test_explicit_open_registration_can_replace_unknown_deadline() -> None:
     assert report.status == VerificationStatus.VERIFIED
 
 
+def test_technical_bootcamp_with_unknown_cost_is_not_falsely_rejected() -> None:
+    source = "https://tuwaiq.edu.sa/bootcamp/data-ai/view"
+    candidate = OpportunityCandidate(
+        title="معسكر علم البيانات والذكاء الاصطناعي",
+        organization="أكاديمية طويق",
+        opportunity_type=OpportunityType.BOOTCAMP,
+        city="الرياض",
+        delivery_mode=DeliveryMode.IN_PERSON,
+        accepted_majors=["التخصصات التقنية"],
+        registration_open=True,
+        application_url=source,
+        source_url=source,
+        technical_focus=True,
+        is_free=None,
+        evidence=[
+            Evidence(
+                field_name=field,
+                value=value,
+                quote=quote,
+                source_url=source,
+                official_source=True,
+            )
+            for field, value, quote in [
+                ("organization", "أكاديمية طويق", "أكاديمية طويق"),
+                ("city", "الرياض", "الرياض - المقر الرئيسي"),
+                ("accepted_majors", "التخصصات التقنية", "شهادة البكالوريوس تخصص تقني"),
+                ("registration_status", "open", "متاح التسجيل"),
+                ("technical_focus", "true", "علم البيانات والذكاء الاصطناعي"),
+            ]
+        ],
+    )
+
+    report = VerificationAgent().verify(candidate)
+
+    assert report.status == VerificationStatus.VERIFIED
+    assert "free_cost_evidence" not in report.missing_fields
+
+
 def test_first_party_structured_tuwaiq_data_is_not_downgraded_by_llm() -> None:
     source = "https://tuwaiq.edu.sa/bootcamp/current/view"
     candidate = OpportunityCandidate(

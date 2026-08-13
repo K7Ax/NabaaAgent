@@ -267,10 +267,12 @@ class VerificationAgent:
                 missing.append("accepted_majors_or_technical_focus")
         elif not candidate.evidence_for("accepted_majors"):
             missing.append("accepted_majors_evidence")
-        if candidate.opportunity_type in {
-            OpportunityType.COURSE,
-            OpportunityType.BOOTCAMP,
-        } and (candidate.is_free is not True or not candidate.evidence_for("cost")):
+        if (
+            candidate.opportunity_type
+            in {OpportunityType.COURSE, OpportunityType.BOOTCAMP}
+            and candidate.is_free is True
+            and not candidate.evidence_for("cost")
+        ):
             missing.append("free_cost_evidence")
 
         official_evidence = sum(item.official_source for item in candidate.evidence)
