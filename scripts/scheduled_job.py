@@ -115,6 +115,10 @@ def _queries(mode: str) -> list[str]:
             f"هاكاثون تحدي مسابقة تقنية طلاب الجامعات الرياض السعودية {year} "
             "التسجيل مفتوح رابط رسمي"
         ),
+        (
+            f"تدريب تعاوني هاكاثون معسكر برنامج تقني الرياض السعودية {year} "
+            "التسجيل مفتوح site:x.com"
+        ),
     ]
 
 
@@ -229,9 +233,6 @@ def _deep_candidates(queries: list[str], quota_guard: Callable[[int], bool]) -> 
                         break
             if added >= 2:
                 break
-        if len(pages) >= 6:
-            break
-
     if not pages or not (settings.groq_api_key or settings.openrouter_api_key):
         return candidates
     context = multiprocessing.get_context("spawn")

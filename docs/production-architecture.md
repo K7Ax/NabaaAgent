@@ -29,9 +29,9 @@ digest. Closing opportunities can become immediate from 60.
 
 The half-hour collector calls first-party Tuwaiq, Future Skills, KSU Alumni Gate, and
 Financial Academy endpoints, plus public employer ATS APIs from Ashby, Lever, and
-Greenhouse. It uses no LLM or search provider. Deep discovery runs a six-query category
+Greenhouse. It uses no LLM or search provider. Deep discovery runs a seven-query category
 matrix. Before every Tavily basic call, the collector asks Railway to reserve one credit.
-At three cycles per day this is approximately 540 credits per 30-day month, leaving a
+At three cycles per day this is approximately 630 credits per 30-day month, leaving a
 safety reserve under the 900-credit cap. The persistent counter refuses reservations
 beyond the configured limit. LLM extraction results remain associated with source
 content; deterministic structured adapters do not invoke an LLM.
