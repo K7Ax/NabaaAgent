@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import re
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime
 from ipaddress import ip_address
@@ -77,9 +80,15 @@ class WebResearchTools:
         max_results: int = 5,
         timeout: float = 20,
         tavily_api_key: str | None = None,
+        tavily_quota_guard: Callable[[int], bool] | None = None,
+        tavily_search_depth: str = "advanced",
     ) -> None:
         self.max_results = max_results
         self.tavily_api_key = tavily_api_key
+        self.tavily_quota_guard = tavily_quota_guard
+        if tavily_search_depth not in {"basic", "advanced"}:
+            raise ValueError("tavily_search_depth must be 'basic' or 'advanced'")
+        self.tavily_search_depth = tavily_search_depth
         self.client = httpx.Client(
             timeout=timeout,
             follow_redirects=False,
@@ -88,10 +97,7 @@ class WebResearchTools:
 
     def search_web(self, query: str) -> tuple[list[SourcePage], ToolObservation]:
         folded_query = query.casefold()
-        if (
-            "site:tuwaiq.edu.sa" in folded_query
-            and "-site:tuwaiq.edu.sa" not in folded_query
-        ):
+        if "site:tuwaiq.edu.sa" in folded_query and "-site:tuwaiq.edu.sa" not in folded_query:
             return self._search_tuwaiq(query)
         if self.tavily_api_key:
             pages, observation = self._search_tavily(query)
@@ -135,16 +141,33 @@ class WebResearchTools:
         pages: list[SourcePage] = []
         credits = 0
         request_id = None
+        reserved_credits = 1 if self.tavily_search_depth == "basic" else 2
+        if self.tavily_quota_guard and not self.tavily_quota_guard(reserved_credits):
+            return pages, ToolObservation(
+                tool="tavily_search",
+                success=False,
+                detail="Monthly Tavily safety budget exhausted; using free fallback",
+                latency_ms=0,
+                metadata={"query": query, "credits": 0, "budget_blocked": True},
+            )
         try:
             payload = {
                 "query": query[:400],
-                "search_depth": "advanced",
-                "chunks_per_source": 3,
+                "search_depth": self.tavily_search_depth,
                 "max_results": self.max_results,
                 "include_raw_content": "markdown",
                 "include_answer": False,
                 "time_range": "year",
+                "country": "saudi arabia",
             }
+            if self.tavily_search_depth == "advanced":
+                payload["chunks_per_source"] = 3
+            explicit_domains = [
+                domain.casefold()
+                for domain in re.findall(r"(?<!-)site:([\w.-]+)", query, re.I)
+            ]
+            if explicit_domains:
+                payload["include_domains"] = sorted(set(explicit_domains))
             if "-site:tuwaiq.edu.sa" in query.casefold():
                 payload["include_domains"] = [
                     "athkax.sdaia.gov.sa",
@@ -202,7 +225,7 @@ class WebResearchTools:
                 "result_count": len(pages),
                 "credits": credits,
                 "request_id": request_id,
-                "search_depth": "advanced",
+                "search_depth": self.tavily_search_depth,
             },
         )
 
@@ -211,50 +234,43 @@ class WebResearchTools:
         started = time.perf_counter()
         pages: list[SourcePage] = []
         try:
-            response = self.client.get(
-                "https://tuwaiq.edu.sa/api/GetInitiativePublishesShorten/100/1?type=NORMAL"
-            )
-            response.raise_for_status()
-            rows = response.json().get("data", [])
-            eligible_rows = [
-                row
-                for row in rows
-                if row.get("isOpen")
-                and row.get("isRegistrationOpen")
-                and not row.get("isRegistrationClosed")
-                and not row.get("isPaid")
-                and _future_or_today(row.get("registrationEndDate"))
-            ]
+            eligible_rows = self._tuwaiq_open_rows()
             eligible_rows.sort(
-                key=lambda row: _tuwaiq_relevance(row, query),
-                reverse=True,
-            )
-            # Preserve enough first-party candidates for batch verification. The final
-            # delivery layer still caps what the student receives in one search.
-            for row in eligible_rows[: max(self.max_results, 10)]:
-                slug = row.get("slug")
-                if not slug:
-                    continue
-                detail_response = self.client.get(
-                    f"https://tuwaiq.edu.sa/api/GetInitiativePublishBySlug/{slug}"
+                key=lambda row: (
+                    str(row.get("registrationEndDate") or "9999-12-31"),
+                    -_tuwaiq_relevance(row, query),
                 )
-                detail_response.raise_for_status()
-                detail = detail_response.json()
+            )
+
+            # Detail pages contain the exact requirements and evidence needed by the
+            # verifier. Fetch them concurrently so complete coverage does not turn the
+            # fast official scan into a several-minute sequential crawl.
+            with ThreadPoolExecutor(max_workers=min(8, max(1, len(eligible_rows)))) as executor:
+                details = executor.map(self._tuwaiq_detail, eligible_rows)
+            for row, detail in zip(eligible_rows, details, strict=True):
+                slug = row.get("slug")
+                if not slug or not detail:
+                    continue
                 majors = _majors_from_requirements(detail.get("requirements") or [])
                 city, mode = _location_from_tuwaiq(detail)
                 deadline = (detail.get("registrationEndDate") or "")[:10]
                 application_url = f"https://tuwaiq.edu.sa/bootcamp/{slug}/view"
+                opportunity_type = _tuwaiq_opportunity_type(detail)
+                technical_quote = _tuwaiq_technical_quote(detail)
                 content = (
                     "OPPORTUNITY_SENTINEL_STRUCTURED_SOURCE\n"
                     "organization: أكاديمية طويق\n"
-                    "type: course\n"
+                    f"type: {opportunity_type}\n"
                     f"city: {city}\n"
                     f"mode: {mode}\n"
                     f"majors: {majors}\n"
                     f"deadline: {deadline}\n"
                     "registration_status: open\n"
+                    "cost: free\n"
                     f"apply: {application_url}\n"
-                    "requirements: "
+                    + ("technical_focus: true\n" if technical_quote else "")
+                    + (f"technical_evidence: {technical_quote}\n" if technical_quote else "")
+                    + "requirements: "
                     + " | ".join(detail.get("requirements") or [])
                 )
                 pages.append(
@@ -284,6 +300,55 @@ class WebResearchTools:
             latency_ms=elapsed,
             metadata={"result_count": len(pages), "source": "tuwaiq.edu.sa"},
         )
+
+    def _tuwaiq_open_rows(self) -> list[dict]:
+        """Paginate the official catalogue until it reaches past registrations."""
+        unique: dict[str, dict] = {}
+        page_number = 1
+        while page_number <= 100:
+            response = self.client.get(
+                "https://tuwaiq.edu.sa/api/"
+                f"GetInitiativePublishesShorten/20/{page_number}?type=NORMAL"
+            )
+            response.raise_for_status()
+            body = response.json()
+            rows = body.get("data", [])
+            if not rows:
+                break
+            for row in rows:
+                if (
+                    row.get("isOpen")
+                    and row.get("isRegistrationOpen")
+                    and not row.get("isRegistrationClosed")
+                    and not row.get("isPaid")
+                    and _future_or_today(row.get("registrationEndDate"))
+                ):
+                    identifier = str(row.get("id") or row.get("slug") or "")
+                    if identifier:
+                        unique[identifier] = row
+            # The official catalogue is ordered from current/future initiatives into
+            # historical ones. Once an entire page has no future deadline, later pages
+            # cannot contain a currently applicable registration.
+            if not any(_future_or_today(row.get("registrationEndDate")) for row in rows):
+                break
+            total_pages = int(body.get("pagination", {}).get("totalPages") or 0)
+            if total_pages and page_number >= total_pages:
+                break
+            page_number += 1
+        return list(unique.values())
+
+    def _tuwaiq_detail(self, row: dict) -> dict | None:
+        slug = row.get("slug")
+        if not slug:
+            return None
+        try:
+            response = self.client.get(
+                f"https://tuwaiq.edu.sa/api/GetInitiativePublishBySlug/{slug}"
+            )
+            response.raise_for_status()
+            return response.json()
+        except (httpx.HTTPError, ValueError):
+            return None
 
     def open_page(self, url: str) -> tuple[SourcePage | None, ToolObservation]:
         started = time.perf_counter()
@@ -371,7 +436,11 @@ def _looks_official(url: str) -> bool:
     host = (urlparse(url).hostname or "").casefold()
     trusted_roots = {
         "aramco.com",
+        "ksu.edu.sa",
+        "alumni.ksu.edu.sa",
+        "dar.ksu.edu.sa",
         "futurex.sa",
+        "elm.sa",
         "misk.org.sa",
         "neom.com",
         "riyadh.sa",
@@ -416,6 +485,65 @@ def _tuwaiq_relevance(row: dict, query: str) -> int:
         "برمجة",
     )
     return 10 * len(terms.intersection(text.split())) + 20 * sum(x in text for x in technical)
+
+
+def _tuwaiq_opportunity_type(detail: dict) -> str:
+    category = str(detail.get("initiativeCategoryName") or "").strip().casefold()
+    if "معسكر" in category or "bootcamp" in category:
+        return "bootcamp"
+    if any(marker in category for marker in ("لقاء", "ويبينار", "ندوة", "event", "webinar")):
+        return "event"
+    return "course"
+
+
+def _tuwaiq_technical_quote(detail: dict) -> str | None:
+    """Return an exact first-party quote proving that the initiative is technical."""
+    values: list[str] = []
+    for field in ("title", "description"):
+        value = str(detail.get(field) or "").strip()
+        if value:
+            values.append(value)
+    for field in ("goals", "features", "requirements"):
+        value = detail.get(field) or []
+        if isinstance(value, list):
+            values.extend(str(item).strip() for item in value if str(item).strip())
+
+    technical_markers = (
+        "تقني",
+        "تقنية",
+        "برمج",
+        "الذكاء الاصطناعي",
+        "بيانات",
+        "الأمن السيبراني",
+        "الحوسبة",
+        "سحابي",
+        "شبكات",
+        "قواعد البيانات",
+        "sql",
+        "python",
+        "java",
+        "javascript",
+        "تطوير الويب",
+        "تطوير التطبيقات",
+        "الواقع الافتراضي",
+        "الواقع المعزز",
+        "تجربة المستخدم",
+        "واجهات",
+        "روبوت",
+        "إنترنت الأشياء",
+        "blockchain",
+        "cloud",
+        "software",
+        "cyber",
+        "data",
+        "machine learning",
+        "artificial intelligence",
+    )
+    for value in values:
+        folded = value.casefold()
+        if any(marker in folded for marker in technical_markers):
+            return value[:1000]
+    return None
 
 
 def _majors_from_requirements(requirements: list[str]) -> str:

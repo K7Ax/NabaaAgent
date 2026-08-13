@@ -23,7 +23,16 @@ class Settings(BaseSettings):
     openrouter_model: str = "openrouter/free"
     search_max_results: int = Field(default=5, ge=1, le=20)
     request_timeout_seconds: float = Field(default=20, ge=3, le=60)
-    notification_interval_minutes: int = Field(default=360, ge=15, le=1440)
+    notification_interval_minutes: int = Field(default=480, ge=15, le=1440)
+    official_scan_interval_minutes: int = Field(default=30, ge=15, le=1440)
+    discovery_cycle_timeout_seconds: int = Field(default=150, ge=30, le=600)
+    search_heartbeat_hours: int = Field(default=24, ge=1, le=168)
+    public_base_url: str | None = None
+    telegram_webhook_secret: str | None = None
+    internal_api_secret: str | None = None
+    tavily_monthly_credit_limit: int = Field(default=900, ge=0, le=1000)
+    digest_hour_riyadh: int = Field(default=18, ge=0, le=23)
+    delivery_batch_size: int = Field(default=100, ge=1, le=500)
 
 
 @lru_cache

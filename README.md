@@ -1,45 +1,49 @@
-# NabaaAgent — Opportunity Sentinel
+# NabaaAgent — نبأ
 
 [![Quality Gate](https://github.com/K7Ax/NabaaAgent/actions/workflows/quality.yml/badge.svg)](https://github.com/K7Ax/NabaaAgent/actions/workflows/quality.yml)
 
-An evidence-first AI agent that discovers technical student opportunities in Riyadh,
-checks whether they are still open and suitable for each student, and delivers only
-verified results through a button-driven Telegram bot.
+نبأ منصة Telegram عربية تكتشف فرص الطلاب مركزيًا، تتحقق من رابط التقديم والأدلة،
+ثم تطابق الفرصة برمجيًا مع ملف كل طالب. تبدأ المنصة بجامعة الملك سعود، وتدعم
+طلاب الجامعات الأخرى والفرص المتاحة في السعودية أو عن بُعد.
 
-The central safety rule is simple: an LLM may discover and extract claims, but it cannot
-publish an opportunity by itself. Deterministic Python policy, field-level source
-evidence, eligibility matching, and human review control publication.
+## ما الذي تغير في الإصدار 0.2
 
-## What is implemented
+- البحث مركزي مرة واحدة بدل تكراره لكل طالب.
+- Telegram Webhook على Railway بدل Long Polling وعملية خلفية دائمة.
+- GitHub Actions يجمع الفرص كل 30 دقيقة ويجري بحثًا عميقًا كل 6 ساعات.
+- سجل مصادر، دورات فحص، إشارات خام، نسخ فرص، أدلة، صحة مصادر وميزانيات استخدام.
+- 12 فئة: التدريب الصيفي والتعاوني، برامج الخريجين، الوظائف الجزئية والمبتدئة،
+  الدورات، المعسكرات، المنح، المسابقات، الهاكاثونات، الفعاليات والتطوع.
+- تصنيف KSU بإصدار مستقل، مع اختيار الجامعة والكلية والتخصص بالأزرار.
+- اختيار أنواع متعددة من الفرص وأسئلة أهلية تدريجية بالأزرار.
+- مطابقة حتمية لا تعتمد على LLM ودرجة مفهومة من 100.
+- إشعارات فورية للفرص الأقوى وملخص يومي للبقية.
+- إعادة فتح صفحة التقديم قبل الإرسال؛ الصفحة المغلقة أو غير المتاحة لا تُرسل.
+- Tavily وGroq وOpenRouter للاكتشاف والتحليل فقط، وليس لاتخاذ قرار الأهلية.
+- حد Tavily شهري مركزي يفشل بأمان قبل تجاوز الرصيد المجاني.
+- HMAC مع مدة صلاحية خمس دقائق لكل واجهة تشغيل داخلية.
+- ترحيل إضافي يحافظ على الطلاب والمحـفوظات والتسليمات من الإصدار السابق.
 
-- A real LangGraph `StateGraph` with nine nodes, conditional routing, batch collection,
-  and a bounded ReAct-style search loop.
-- Two distinct agents: Discovery and independent Verification, coordinated through typed
-  shared state.
-- Live web search and page retrieval with URL validation and private-network/SSRF blocking.
-- Optional Tavily advanced search for courses, internships, and CO-OP opportunities, including
-  ranked extracted content, date filtering, credit telemetry, and fallback to DDGS.
-- A first-party Tuwaiq connector reads up to 100 academy listings and fetches detailed
-  structured records for current registration state, deadlines, cost, location,
-  requirements, and application links. It runs alongside outside-source discovery.
-- Structured LLM extraction and independent review through Groq, with automatic
-  OpenRouter fallback on rate limits or provider failure.
-- Prompt-injection detection, Pydantic output validation, evidence requirements,
-  expiry/location checks, and deterministic student eligibility rules.
-- Durable SQLite LangGraph checkpoints and a real `interrupt` / `Command(resume=...)`
-  human-review flow that survives process restarts.
-- A fully button-driven Arabic Telegram experience: onboarding, search, profile, saved
-  opportunities, application links, and administrator approval.
-- Persistent student, opportunity, saved-item, delivery, and deduplication records.
-- Each search can deliver up to five distinct verified opportunities; scheduled discovery
-  and alerts also process unseen matches in batches.
-- Structured JSON logs, health/readiness endpoints, Docker image, Docker Compose services,
-  automated tests, coverage output, and a reproducible capstone evidence script.
+## البنية
 
-## Quick start on Windows
+```mermaid
+flowchart LR
+    O["مصادر رسمية وواجهات عامة"] --> C["جامع مركزي في GitHub Actions"]
+    X["بحث وإشارات مفهرسة"] --> C
+    C --> V["تحقق حتمي + LangGraph عند الغموض"]
+    V -->|"دفعة موقعة"| A["FastAPI على Railway"]
+    A --> D[("SQLite WAL")]
+    D --> M["محرك المطابقة"]
+    M --> Q["طابور فوري + يومي"]
+    Q --> T["Telegram Webhook"]
+```
 
-Requirements: Python 3.11 or newer, a Telegram bot token, and at least one free LLM API
-key from Groq or OpenRouter. Using both enables provider fallback.
+لا يُعد منشور LinkedIn أو X ولا موقع تجميعي دليلًا كافيًا. يمكن استخدامه كإشارة
+للعثور على صفحة تقديم رسمية فقط. الفرصة غير المكتملة تبقى مخفية.
+
+## التشغيل محليًا
+
+يتطلب Python 3.11 أو أحدث:
 
 ```powershell
 python -m venv .venv
@@ -47,111 +51,83 @@ python -m venv .venv
 Copy-Item .env.example .env
 ```
 
-Open `.env` locally and fill these values. Never paste secrets into chat or commit them:
-
-```dotenv
-TELEGRAM_BOT_TOKEN=your_botfather_token
-TELEGRAM_ADMIN_CHAT_ID=your_numeric_telegram_id
-GROQ_API_KEY=your_groq_key
-OPENROUTER_API_KEY=your_openrouter_key
-TAVILY_API_KEY=your_optional_tavily_key
-```
-
-Then run:
-
-```powershell
-.venv\Scripts\opportunity-bot.exe
-```
-
-Open the bot in Telegram, press **Start**, and complete the button-based onboarding.
-Detailed credential and admin setup is in
-[`docs/telegram-setup.md`](docs/telegram-setup.md).
-
-## Verification before a demo
-
-```powershell
-.venv\Scripts\python -m ruff check .
-.venv\Scripts\python -m pytest
-.venv\Scripts\python scripts\capstone_demo.py
-.venv\Scripts\python scripts\live_smoke_test.py
-.venv\Scripts\python scripts\live_workflow_test.py
-```
-
-The deterministic demo proves the successful path, a blocked indirect prompt-injection
-attack, the bounded re-search loop, an actual human interrupt, and resumption from the
-same SQLite checkpoint after rebuilding the graph. Evidence is written to `artifacts/`.
-The live smoke test checks Telegram, the administrator chat, each configured LLM provider,
-and live search without writing API keys to its evidence file.
-The same deterministic quality gate runs on every GitHub push without requiring secrets:
-Ruff, all tests, at least 70% line coverage, and the executed capstone proof paths.
-
-Start the service artifact separately if needed:
+ضع الأسرار في `.env` محليًا ولا ترسلها في المحادثات أو Git. يمكن تشغيل الواجهة:
 
 ```powershell
 .venv\Scripts\python -m uvicorn opportunity_sentinel.api:app --reload
 ```
 
-- Health: `http://localhost:8000/health`
-- Readiness: `http://localhost:8000/readiness`
+يظل `opportunity-bot` متاحًا للتطوير المحلي باستخدام Long Polling، لكنه لا يشغل
+بحثًا دوريًا لكل طالب. بيئة الإنتاج تستخدم Webhook فقط.
 
-## Docker
+## نشر Railway
 
-After creating `.env`:
+أنشئ خدمة واحدة من Dockerfile واربط Volume بالمسار `/app/data`. أضف المتغيرات:
+
+```dotenv
+APP_ENV=production
+DATA_DB_PATH=/app/data/opportunity_sentinel.db
+CHECKPOINT_DB_PATH=/app/data/opportunity_checkpoints.sqlite
+PUBLIC_BASE_URL=https://YOUR-SERVICE.up.railway.app
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_ADMIN_CHAT_ID=...
+TELEGRAM_WEBHOOK_SECRET=RANDOM_LONG_VALUE
+INTERNAL_API_SECRET=ANOTHER_RANDOM_LONG_VALUE
+GROQ_API_KEY=...
+OPENROUTER_API_KEY=...
+TAVILY_API_KEY=...
+TAVILY_MONTHLY_CREDIT_LIMIT=900
+```
+
+عند بدء الخدمة يُسجّل Webhook تلقائيًا. يعرض `/readiness` حالة المكونات وأعداد
+السجلات دون كشف أي سر.
+
+## أسرار GitHub Actions
+
+أضف إلى Repository Secrets:
+
+- `NABAA_API_URL`: رابط خدمة Railway.
+- `INTERNAL_API_SECRET`: نفس القيمة الموجودة في Railway.
+- `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `TAVILY_API_KEY`.
+
+Workflow المسمى `Central Opportunity Discovery` ينفذ:
+
+- `fast`: موصلات طويق، مهارات المستقبل، بوابة خريجي KSU، الأكاديمية المالية،
+  ولوحات الشركات الرسمية Ashby/Lever/Greenhouse؛ بلا Tavily أو LLM، كل 30 دقيقة.
+- `deep`: ستة استعلامات متخصصة تغطي التدريب والتعاوني والخريجين والدوام الجزئي
+  والهاكاثونات وإشارات LinkedIn كل 8 ساعات، باستخدام Tavily Basic حتى 20 نتيجة.
+- `revalidate`: انتهاء المواعيد وإعادة فتح الروابط يوميًا.
+- `deliver`: توزيع طابور المطابقات بعد كل تشغيل ناجح.
+
+يمكن تشغيل أي وضع يدويًا من GitHub دون تغيير الكود.
+
+## ضمان الجودة
 
 ```powershell
-docker compose up --build
+.venv\Scripts\python -m ruff check src tests scripts
+.venv\Scripts\python -m pytest --cov=opportunity_sentinel --cov-fail-under=70
+.venv\Scripts\python scripts\capstone_demo.py
 ```
 
-Compose runs the API and Telegram bot as separate services sharing a persistent SQLite
-volume. The container runs as a non-root user. The API is exposed on port 8000.
+الاختبارات تغطي الترحيل القديم، التوثيق، منع التكرار، المطابقة الواسعة والضيقة،
+الأهلية التدريجية، HMAC، حدود Tavily، LangGraph، الأمن، Telegram وواجهات الخدمة.
 
-## Architecture
+## قواعد النشر غير القابلة للتجاوز
 
-```mermaid
-flowchart LR
-    T["Telegram buttons"] --> C["LangGraph coordinator"]
-    C --> D["Discovery Agent"]
-    D --> W["Search + page tools"]
-    D --> G["Injection and URL guardrails"]
-    G --> V["Verification Agent"]
-    V -->|"missing evidence"| D
-    V -->|"uncertain"| H["Human interrupt"]
-    H -->|"resume"| C
-    V -->|"verified"| E["Eligibility matcher"]
-    E -->|"matching student"| P["SQLite + Telegram delivery"]
-    C <--> K["SQLite checkpoints"]
-    D <--> R["Groq → OpenRouter fallback"]
-```
+1. رابط تقديم رسمي قابل للفتح.
+2. دليل رسمي على الجهة والموقع والأهلية.
+3. موعد مستقبلي أو دليل صريح على أن التسجيل مفتوح.
+4. الدورة التي توصف بالمجانية تحتاج دليلًا على عدم وجود رسوم.
+5. الشرط الإلزامي المجهول ينتج سؤالًا للطالب، لا افتراضًا.
+6. فشل LLM أو Tavily لا يخفض مستوى الأدلة المطلوب.
+7. الفرصة المغلقة أو غير القابلة لإعادة التحقق لا تُرسل.
 
-See [`docs/architecture.md`](docs/architecture.md),
-[`docs/security.md`](docs/security.md), and
-[`docs/evaluation.md`](docs/evaluation.md) for the engineering rationale and proof map.
-The exact 100-point mapping and GitHub submission status are in
-[`docs/rubric-audit.md`](docs/rubric-audit.md).
+## حدود صريحة
 
-## Scope and honest limitations
+لا توجد وسيلة قانونية أو تقنية تضمن اكتشاف كل إعلان في الإنترنت. نبأ يقيس تغطية
+قائمة مصادر معلنة ويستخدم البحث لسد الفجوات. Railway Free ومزودو النماذج المجانية
+لا يقدمون ضمان توفر؛ عند وصول الاستخدام إلى الحد يتوقف البحث العميق بأمان، بينما
+تبقى البيانات وقواعد التوثيق دون تخفيض.
 
-- Initial scope is technical students and Riyadh or online opportunities.
-- Search-engine coverage is not mathematically complete; no web system can guarantee that
-  every opportunity on the internet is indexed. The design instead optimizes publication
-  precision: uncertain or incomplete items are withheld or sent to human review.
-- Official Saudi government, education, and organization domains receive the strongest
-  automatic trust. Other domains require stronger evidence or human approval.
-- Free provider quotas and model availability are controlled by Groq/OpenRouter and may
-  change; fallback prevents one provider failure from stopping the workflow when both keys
-  are configured.
-
-## Repository map
-
-- `src/opportunity_sentinel/graph.py` — workflow nodes, edges, loop, interrupt, checkpoint.
-- `src/opportunity_sentinel/agents.py` — Discovery and Verification agents.
-- `src/opportunity_sentinel/tools.py` — live and deterministic research tools.
-- `src/opportunity_sentinel/llm.py` — structured provider router and fallback.
-- `src/opportunity_sentinel/telegram_bot.py` — Arabic button UI and notifications.
-- `src/opportunity_sentinel/repository.py` — application persistence and deduplication.
-- `tests/` — graph, security, API, LLM fallback, storage, and UI tests.
-- `scripts/capstone_demo.py` — reproducible executed evidence.
-
-Built for the **Advanced Agentic AI Systems Engineering** capstone, August 2026 cohort,
-delivered through SDAIA Academy. See
-[SDAIA Academy on GitHub](https://github.com/SDAIAAcademy).
+راجع [معمارية الإنتاج](docs/production-architecture.md)،
+[إعداد Telegram](docs/telegram-setup.md)، و[سياسة الأمن](docs/security.md).

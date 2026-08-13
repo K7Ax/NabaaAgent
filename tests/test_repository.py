@@ -31,4 +31,3 @@ def test_profile_opportunity_deduplication_and_delivery(
     assert repository.was_delivered(123, first_id) is True
     repository.save_for_student(123, first_id)
     assert repository.list_saved(123)[0][0] == first_id
-

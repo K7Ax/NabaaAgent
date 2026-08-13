@@ -11,6 +11,7 @@ from opportunity_sentinel.repository import Repository
 from opportunity_sentinel.telegram_bot import (
     MAJORS,
     BotRuntime,
+    _cycle_summary,
     _deliver_graph_result,
     _initial_state,
     create_runtime,
@@ -24,15 +25,30 @@ from opportunity_sentinel.telegram_bot import (
 from opportunity_sentinel.tools import InMemoryResearchTools, SourcePage
 
 
+def test_collection_cycle_summary_exposes_real_search_counts() -> None:
+    text = _cycle_summary(
+        {
+            "new_ids": {"one", "two"},
+            "runs": [
+                {"ok": True, "received": 5, "verified": 5},
+                {"ok": True, "received": 3, "verified": 3},
+            ],
+        }
+    )
+
+    assert "فُحص 8" in text
+    assert "وُثّق 8" in text
+    assert "الجديد 2" in text
+
+
 def test_all_student_navigation_is_button_driven() -> None:
     assert all(button.callback_data for row in main_menu().inline_keyboard for button in row)
     assert len(major_keyboard().inline_keyboard) == len(MAJORS)
     assert all(
-        button.callback_data
-        for row in type_keyboard("onboard").inline_keyboard
-        for button in row
+        button.callback_data for row in type_keyboard("onboard").inline_keyboard for button in row
     )
     assert all(button.callback_data for row in year_keyboard().inline_keyboard for button in row)
+    assert len(major_keyboard("علوم الحاسب والمعلومات").inline_keyboard) >= 5
 
 
 def test_workflow_thread_is_bound_to_authenticated_telegram_user() -> None:
@@ -69,9 +85,7 @@ async def test_batch_delivery_deduplicates_and_persists_results(
     tmp_path: Path,
     verified_page: SourcePage,
 ) -> None:
-    first = DiscoveryAgent(InMemoryResearchTools([verified_page])).extract(
-        verified_page.__dict__
-    )
+    first = DiscoveryAgent(InMemoryResearchTools([verified_page])).extract(verified_page.__dict__)
     assert first is not None
     second_data = first.model_dump(mode="json")
     second_data.update(
@@ -82,9 +96,7 @@ async def test_batch_delivery_deduplicates_and_persists_results(
         }
     )
     second = OpportunityCandidate.model_validate(second_data)
-    runtime = BotRuntime(
-        Settings(), Repository(tmp_path / "telegram.sqlite"), graph=object()
-    )
+    runtime = BotRuntime(Settings(), Repository(tmp_path / "telegram.sqlite"), graph=object())
     message = SimpleNamespace(answer=AsyncMock(), chat=SimpleNamespace(id=77))
     collected = [
         {"candidate": first.model_dump(mode="json"), "verification": {"score": 1.0}},
@@ -115,9 +127,7 @@ async def test_batch_delivery_deduplicates_and_persists_results(
 async def test_delivery_fails_closed_when_graph_has_no_verified_result(
     tmp_path: Path,
 ) -> None:
-    runtime = BotRuntime(
-        Settings(), Repository(tmp_path / "empty.sqlite"), graph=object()
-    )
+    runtime = BotRuntime(Settings(), Repository(tmp_path / "empty.sqlite"), graph=object())
     message = SimpleNamespace(answer=AsyncMock(), chat=SimpleNamespace(id=88))
 
     await _deliver_graph_result(

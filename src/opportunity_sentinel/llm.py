@@ -41,7 +41,8 @@ class ModelRouter:
         if not providers:
             raise ValueError("At least one configured LLM provider is required")
         self.providers = providers
-        self.client = httpx.Client(timeout=timeout)
+        self.timeout = timeout
+        self.client = httpx.Client(timeout=httpx.Timeout(timeout, connect=min(timeout, 5.0)))
 
     def generate_json(
         self,
@@ -52,10 +53,17 @@ class ModelRouter:
         task: str,
     ) -> BaseModel:
         errors: list[str] = []
+        deadline = time.monotonic() + min(45.0, self.timeout * len(self.providers))
         for provider in self.providers:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                errors.append("total_provider_deadline_exceeded")
+                break
             started = time.perf_counter()
             try:
-                result = self._call(provider, system, user, schema)
+                result = self._call(
+                    provider, system, user, schema, timeout=min(self.timeout, remaining)
+                )
                 logger.info(
                     "llm_call",
                     task=task,
@@ -74,12 +82,16 @@ class ModelRouter:
                             provider=provider.name,
                             mode="best_effort",
                         )
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 1:
+                            raise ValueError("provider deadline exceeded before schema retry")
                         result = self._call(
                             provider,
                             system,
                             user,
                             schema,
                             strict=False,
+                            timeout=min(self.timeout, remaining),
                         )
                         logger.info(
                             "llm_call",
@@ -121,6 +133,7 @@ class ModelRouter:
         user: str,
         schema: type[BaseModel],
         strict: bool = True,
+        timeout: float | None = None,
     ) -> BaseModel:
         headers = {
             "Authorization": f"Bearer {provider.api_key}",
@@ -145,7 +158,10 @@ class ModelRouter:
         }
         payload.update(provider.body_options or {})
         response = self.client.post(
-            f"{provider.base_url.rstrip('/')}/chat/completions", headers=headers, json=payload
+            f"{provider.base_url.rstrip('/')}/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=timeout or self.timeout,
         )
         response.raise_for_status()
         body = response.json()

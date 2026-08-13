@@ -20,7 +20,7 @@ a user, and API keys must never enter prompts, logs, or Git.
 - A verified result requires field-level evidence and at least one official Saudi
   government, educational, or organizational source; otherwise it is re-searched or
   escalated to a human.
-- Expired and out-of-Riyadh opportunities are rejected by deterministic code.
+- Expired opportunities are rejected; city and remote eligibility are matched against each profile.
 - Eligibility is checked after verification and again after human approval.
 - Research loops and page sizes are bounded.
 - Admin review callbacks verify the configured Telegram administrator ID.
@@ -39,4 +39,3 @@ For a public deployment, use PostgreSQL-backed encrypted checkpoints, a managed 
 store, domain allowlists per source, outbound egress policies, encrypted backups, and a
 dedicated content-safety classifier. These do not replace the controls already enforced
 in the application.
-

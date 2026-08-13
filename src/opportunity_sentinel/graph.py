@@ -140,9 +140,7 @@ def build_graph(
             )
         else:
             report = verification_agent.verify(OpportunityCandidate.model_validate(candidate_data))
-        logger.info(
-            "graph_node", node="verify", status=report.status.value, score=report.score
-        )
+        logger.info("graph_node", node="verify", status=report.status.value, score=report.score)
         message = AgentMessage(
             sender="VerificationAgent",
             recipient="LangGraphCoordinator",

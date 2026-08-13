@@ -22,7 +22,7 @@
         "tool": "search_web",
         "success": true,
         "detail": "Found 1 candidate pages",
-        "latency_ms": 0.014299999747890979,
+        "latency_ms": 0.009100000170292333,
         "metadata": {
           "query": "coop Riyadh",
           "attempt": 1
@@ -32,7 +32,7 @@
         "tool": "search_web",
         "success": true,
         "detail": "Found 1 candidate pages",
-        "latency_ms": 0.008299997716676444,
+        "latency_ms": 0.006499998562503606,
         "metadata": {
           "query": "coop Riyadh site:hub.misk.org.sa",
           "attempt": 2
@@ -42,7 +42,7 @@
         "tool": "open_page",
         "success": true,
         "detail": "Page opened",
-        "latency_ms": 0.0008999995770864189,
+        "latency_ms": 0.000700001692166552,
         "metadata": {
           "url": "https://official.example/verified"
         }
@@ -124,7 +124,7 @@
             "quote": "organization: Example Technology Company",
             "source_url": "https://official.example/incomplete",
             "official_source": true,
-            "captured_at": "2026-08-12T19:49:13.324031Z"
+            "captured_at": "2026-08-13T04:27:41.756990Z"
           },
           {
             "field_name": "city",
@@ -132,7 +132,7 @@
             "quote": "city: Riyadh",
             "source_url": "https://official.example/incomplete",
             "official_source": true,
-            "captured_at": "2026-08-12T19:49:13.324031Z"
+            "captured_at": "2026-08-13T04:27:41.756990Z"
           },
           {
             "field_name": "accepted_majors",
@@ -140,9 +140,19 @@
             "quote": "accepted_majors: Software Engineering",
             "source_url": "https://official.example/incomplete",
             "official_source": true,
-            "captured_at": "2026-08-12T19:49:13.324031Z"
+            "captured_at": "2026-08-13T04:27:41.756990Z"
           }
-        ]
+        ],
+        "publication_date": null,
+        "start_date": null,
+        "end_date": null,
+        "degree_levels": [],
+        "requirements": {},
+        "skills": [],
+        "technical_focus": false,
+        "is_free": null,
+        "compensation": null,
+        "remote_allowed": null
       },
       "verification": {
         "status": "needs_research",

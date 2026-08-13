@@ -12,4 +12,3 @@ def test_prompt_injection_is_blocked() -> None:
 def test_normal_opportunity_text_is_allowed() -> None:
     result = scan_untrusted_content("Applications close next month for students in Riyadh.")
     assert result.safe is True
-

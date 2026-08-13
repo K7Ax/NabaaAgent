@@ -50,6 +50,7 @@ def test_explicit_open_registration_can_replace_unknown_deadline() -> None:
         delivery_mode=DeliveryMode.IN_PERSON,
         accepted_majors=["جميع التخصصات"],
         registration_open=True,
+        is_free=True,
         application_url=source,
         source_url=source,
         evidence=[
@@ -65,6 +66,7 @@ def test_explicit_open_registration_can_replace_unknown_deadline() -> None:
                 ("city", "الرياض", "حضوري في مقر الأكاديمية بمدينة الرياض"),
                 ("accepted_majors", "جميع التخصصات", "البرنامج متاح لجميع التخصصات"),
                 ("registration_status", "open", "حالة التسجيل: متاح"),
+                ("cost", "free", "البرنامج مجاني دون رسوم"),
             ]
         ],
     )
@@ -85,6 +87,7 @@ def test_first_party_structured_tuwaiq_data_is_not_downgraded_by_llm() -> None:
         accepted_majors=["التخصصات التقنية"],
         deadline=date.today() + timedelta(days=5),
         registration_open=True,
+        is_free=True,
         application_url=source,
         source_url=source,
         evidence=[
@@ -101,6 +104,7 @@ def test_first_party_structured_tuwaiq_data_is_not_downgraded_by_llm() -> None:
                 ("deadline", str(date.today() + timedelta(days=5))),
                 ("accepted_majors", "التخصصات التقنية"),
                 ("registration_status", "open"),
+                ("cost", "free"),
             ]
         ],
     )
@@ -113,3 +117,41 @@ def test_first_party_structured_tuwaiq_data_is_not_downgraded_by_llm() -> None:
 
     assert report.status == VerificationStatus.VERIFIED
     assert "verified_against_first_party_structured_data" in report.reasons
+
+
+def test_proven_technical_focus_can_replace_literal_major_list() -> None:
+    source = "https://official.example/hackathon"
+    candidate = OpportunityCandidate(
+        title="هاكاثون الذكاء الاصطناعي",
+        organization="جهة حكومية",
+        opportunity_type=OpportunityType.HACKATHON,
+        city="الرياض",
+        delivery_mode=DeliveryMode.IN_PERSON,
+        technical_focus=True,
+        registration_open=True,
+        application_url=source,
+        source_url=source,
+        evidence=[
+            Evidence(
+                field_name=field,
+                value=value,
+                quote=quote,
+                source_url=source,
+                official_source=True,
+            )
+            for field, value, quote in [
+                ("organization", "جهة حكومية", "تنظم الجهة الحكومية الهاكاثون"),
+                ("city", "الرياض", "يقام الهاكاثون في الرياض"),
+                ("registration_status", "open", "التسجيل مفتوح الآن"),
+                (
+                    "technical_focus",
+                    "true",
+                    "تطوير حلول باستخدام الذكاء الاصطناعي وتحليل البيانات",
+                ),
+            ]
+        ],
+    )
+
+    report = VerificationAgent().verify(candidate)
+
+    assert report.status == VerificationStatus.VERIFIED

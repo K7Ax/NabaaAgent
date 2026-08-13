@@ -43,6 +43,9 @@ jobs:
       - name: Execute capstone proof paths
         run: python scripts/capstone_demo.py
 
+      - name: Verify 5,000-student matching target
+        run: python scripts/load_test.py
+
       - name: Upload evaluator evidence
         if: always()
         uses: actions/upload-artifact@v7

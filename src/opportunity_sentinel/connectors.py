@@ -1,0 +1,1065 @@
+from __future__ import annotations
+
+import re
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from datetime import date, datetime
+from html import unescape
+from typing import Any
+from urllib.parse import urljoin
+
+import httpx
+from bs4 import BeautifulSoup
+
+from opportunity_sentinel.models import (
+    DeliveryMode,
+    Evidence,
+    OpportunityCandidate,
+    OpportunityType,
+)
+from opportunity_sentinel.tools import SourcePage
+
+
+class FutureSkillsConnector:
+    """Deterministic first-party connector for MCIT Future Skills courses."""
+
+    base_url = "https://futureskills.mcit.gov.sa"
+    catalogue_url = f"{base_url}/ar/catalogue/all"
+    faq_url = f"{base_url}/ar/seekers-faq"
+    free_evidence = "كافة البرامج التدريبية المقدمة من مهارات المستقبل مجانية"
+
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        *,
+        timeout: float = 20,
+        max_courses: int = 30,
+    ) -> None:
+        self._owns_client = client is None
+        self.client = client or httpx.Client(
+            timeout=timeout,
+            follow_redirects=True,
+            headers={"User-Agent": "OpportunitySentinel/0.1 educational-research-bot"},
+        )
+        self.max_courses = max_courses
+
+    def collect(self, today: date | None = None) -> list[OpportunityCandidate]:
+        """Return only open, future, free courses backed by official-page evidence."""
+        today = today or date.today()
+        faq_response = self.client.get(self.faq_url)
+        faq_response.raise_for_status()
+        faq_text = _page_text(faq_response.text)
+        if self.free_evidence not in faq_text:
+            # Cost is a hard publication gate. A changed FAQ must fail closed.
+            return []
+
+        catalogue_response = self.client.get(self.catalogue_url)
+        catalogue_response.raise_for_status()
+        catalogue = BeautifulSoup(catalogue_response.text, "html.parser")
+        urls = sorted(
+            {
+                urljoin(self.base_url, anchor["href"])
+                for anchor in catalogue.select("a[href]")
+                if re.fullmatch(r"/ar/group/\d+", anchor.get("href", ""))
+            }
+        )[: self.max_courses]
+        if not urls:
+            return []
+
+        with ThreadPoolExecutor(max_workers=min(6, len(urls))) as executor:
+            candidates = list(
+                executor.map(lambda url: self._read_course(url, faq_text, today), urls)
+            )
+        return [candidate for candidate in candidates if candidate is not None]
+
+    def close(self) -> None:
+        if self._owns_client:
+            self.client.close()
+
+    def _read_course(
+        self, url: str, faq_text: str, today: date
+    ) -> OpportunityCandidate | None:
+        response = self.client.get(url)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        text = _page_text(response.text)
+        if "انتهت فترة التقديم" in text or "طلب انضمام" not in text:
+            return None
+
+        join_link = soup.select_one("a.join-link[href]")
+        if not join_link:
+            return None
+        date_match = re.search(
+            r"تبدأ\s*(\d{2}-\d{2}-\d{4})\s*إلى\s*(\d{2}-\d{2}-\d{4})",
+            text,
+        )
+        if not date_match:
+            return None
+        start_date = _arabic_course_date(date_match.group(1))
+        end_date = _arabic_course_date(date_match.group(2))
+        if end_date < today:
+            return None
+
+        title = _course_title(soup, url)
+        organization = _provider_name(soup) or "وزارة الاتصالات وتقنية المعلومات"
+        requirements = _requirements(text)
+        delivery_quote = _delivery_quote(text)
+        if not delivery_quote:
+            return None
+
+        requirement_quote = "المتطلبات السابقة للتدريب: " + "، ".join(
+            quote for _, quote in requirements
+        )
+        evidence = [
+            Evidence(
+                field_name="organization",
+                value=organization,
+                quote=f"مقدم من: {organization}",
+                source_url=url,
+                official_source=True,
+            ),
+            Evidence(
+                field_name="registration_status",
+                value="open",
+                quote="طلب انضمام",
+                source_url=url,
+                official_source=True,
+            ),
+            Evidence(
+                field_name="accepted_majors",
+                value="جميع التخصصات",
+                quote=requirement_quote,
+                source_url=url,
+                official_source=True,
+            ),
+            Evidence(
+                field_name="cost",
+                value="free",
+                quote=self.free_evidence,
+                source_url=self.faq_url,
+                official_source=True,
+            ),
+            Evidence(
+                field_name="delivery_mode",
+                value="online",
+                quote=delivery_quote,
+                source_url=url,
+                official_source=True,
+            ),
+            Evidence(
+                field_name="start_date",
+                value=start_date.isoformat(),
+                quote=date_match.group(0),
+                source_url=url,
+                official_source=True,
+            ),
+        ]
+
+        return OpportunityCandidate(
+            title=title,
+            organization=organization,
+            opportunity_type=OpportunityType.COURSE,
+            delivery_mode=DeliveryMode.ONLINE,
+            accepted_majors=["جميع التخصصات"],
+            registration_open=True,
+            application_url=urljoin(url, str(join_link["href"])),
+            source_url=url,
+            evidence=evidence,
+            start_date=start_date,
+            end_date=end_date,
+            requirements={key: expected for key, _, expected in _requirement_rules(requirements)},
+            is_free=True,
+            remote_allowed=True,
+        )
+
+
+class FinancialAcademyHackathonConnector:
+    """First-party connector for the Financial Academy's current innovation hackathon."""
+
+    page_url = (
+        "https://fa.gov.sa/Services/ProgramDetails/"
+        "ba1ee3c5-4255-407f-9e6e-b36d013b7df3"
+    )
+
+    def __init__(self, client: httpx.Client | None = None, *, timeout: float = 20) -> None:
+        self._owns_client = client is None
+        self.client = client or httpx.Client(
+            timeout=timeout,
+            follow_redirects=True,
+            headers={"User-Agent": "OpportunitySentinel/0.1 educational-research-bot"},
+        )
+
+    def collect(self, today: date | None = None) -> list[OpportunityCandidate]:
+        today = today or date.today()
+        response = self.client.get(self.page_url)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        text = _page_text(response.text)
+        required_quotes = {
+            "registration": "التسجيل",
+            "cost": "مدعوم بالكامل",
+            "city": "الرياض",
+            "technical": "المطورين والمتخصصين في علم البيانات",
+        }
+        if any(quote not in text for quote in required_quotes.values()):
+            return []
+        if any(marker in text for marker in ("انتهى التسجيل", "التسجيل مغلق")):
+            return []
+        start_match = re.search(r"(\d{1,2})\s+سبتمبر\s+(\d{4})", text)
+        if not start_match:
+            return []
+        start_date = date(int(start_match.group(2)), 9, int(start_match.group(1)))
+        if start_date < today:
+            return []
+        registration_link = next(
+            (
+                anchor
+                for anchor in soup.select("a[href]")
+                if _clean_text(anchor) == "التسجيل"
+            ),
+            None,
+        )
+        if not registration_link:
+            return []
+        application_url = urljoin(self.page_url, str(registration_link["href"]))
+        evidence = [
+            Evidence(
+                field_name=field,
+                value=value,
+                quote=quote,
+                source_url=self.page_url,
+                official_source=True,
+            )
+            for field, value, quote in [
+                ("organization", "الأكاديمية المالية", "الأكاديمية المالية"),
+                ("city", "الرياض", required_quotes["city"]),
+                ("registration_status", "open", required_quotes["registration"]),
+                ("cost", "free", required_quotes["cost"]),
+                ("technical_focus", "true", required_quotes["technical"]),
+            ]
+        ]
+        return [
+            OpportunityCandidate(
+                title="هاكاثون الابتكار في السوق المالية",
+                organization="الأكاديمية المالية",
+                opportunity_type=OpportunityType.HACKATHON,
+                city="الرياض",
+                delivery_mode=DeliveryMode.IN_PERSON,
+                technical_focus=True,
+                registration_open=True,
+                application_url=application_url,
+                source_url=self.page_url,
+                evidence=evidence,
+                start_date=start_date,
+                is_free=True,
+            )
+        ]
+
+    def close(self) -> None:
+        if self._owns_client:
+            self.client.close()
+
+
+class KSUAlumniJobsConnector:
+    """First-party connector for public jobs and training on KSU's alumni gate."""
+
+    base_url = "https://alumnigate.ksu.edu.sa"
+    listing_url = f"{base_url}/user/jobs"
+
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        *,
+        timeout: float = 20,
+        max_pages: int = 20,
+    ) -> None:
+        self._owns_client = client is None
+        self.client = client or httpx.Client(
+            timeout=timeout,
+            follow_redirects=True,
+            headers={"User-Agent": "OpportunitySentinel/0.1 educational-research-bot"},
+        )
+        self.max_pages = max_pages
+
+    def collect(self, today: date | None = None) -> list[OpportunityCandidate]:
+        today = today or date.today()
+        urls = self._listing_urls()
+        if not urls:
+            return []
+        with ThreadPoolExecutor(max_workers=min(8, len(urls))) as executor:
+            candidates = list(executor.map(lambda url: self._read_job(url, today), urls))
+        return [candidate for candidate in candidates if candidate is not None]
+
+    def close(self) -> None:
+        if self._owns_client:
+            self.client.close()
+
+    def _listing_urls(self) -> list[str]:
+        urls: set[str] = set()
+        for page_number in range(1, self.max_pages + 1):
+            response = self.client.get(self.listing_url, params={"page": page_number})
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "html.parser")
+            page_urls = {
+                urljoin(self.base_url, str(anchor["href"]))
+                for anchor in soup.select('a[href*="/user/jobs/details/"]')
+            }
+            if not page_urls - urls:
+                break
+            urls.update(page_urls)
+        return sorted(urls)
+
+    def _read_job(self, url: str, today: date) -> OpportunityCandidate | None:
+        response = self.client.get(url)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        main = soup.select_one("#ajax_table")
+        if not main:
+            return None
+
+        status_node = main.select_one("header.card a.g-btn")
+        status = _clean_text(status_node) if status_node else ""
+        if status != "قدم الآن":
+            return None
+        title_node = main.select_one('a[href*="/user/jobs/details/"] span.fs-1')
+        organization_node = main.select_one("header.card section.d-flex .m-0 a")
+        if not title_node or not organization_node:
+            return None
+        title = _clean_text(title_node)
+        organization = _clean_text(organization_node)
+        description_node = main.select_one(".decription_details")
+        description = _clean_text(description_node) if description_node else ""
+        attributes = _ksu_job_attributes(main)
+        majors = _normalized_ksu_majors(attributes.get("التخصص", ""))
+        colleges = _split_values(attributes.get("الكلية", ""))
+        opportunity_type = _ksu_opportunity_type(title, description)
+        technical_quote = _ksu_technical_quote(
+            title,
+            description,
+            colleges,
+            majors,
+            opportunity_type,
+        )
+        if not technical_quote:
+            return None
+
+        location_quote = attributes.get("الموقع", "")
+        city, delivery_mode = _ksu_location(location_quote)
+        if delivery_mode != DeliveryMode.ONLINE and city != "الرياض":
+            return None
+        publication_date = _ksu_publication_date(main)
+        if publication_date and publication_date > today:
+            return None
+
+        evidence = [
+            Evidence(
+                field_name="organization",
+                value=organization,
+                quote=organization,
+                source_url=url,
+                official_source=True,
+            ),
+            Evidence(
+                field_name="registration_status",
+                value="open",
+                quote=status,
+                source_url=url,
+                official_source=True,
+            ),
+            Evidence(
+                field_name="technical_focus",
+                value="true",
+                quote=technical_quote,
+                source_url=url,
+                official_source=True,
+            ),
+        ]
+        if city:
+            evidence.append(
+                Evidence(
+                    field_name="city",
+                    value=city,
+                    quote=location_quote,
+                    source_url=url,
+                    official_source=True,
+                )
+            )
+        if majors:
+            evidence.append(
+                Evidence(
+                    field_name="accepted_majors",
+                    value=", ".join(majors),
+                    quote=attributes.get("التخصص", ""),
+                    source_url=url,
+                    official_source=True,
+                )
+            )
+        if publication_date:
+            evidence.append(
+                Evidence(
+                    field_name="publication_date",
+                    value=publication_date.isoformat(),
+                    quote=publication_date.isoformat(),
+                    source_url=url,
+                    official_source=True,
+                )
+            )
+        return OpportunityCandidate(
+            title=title,
+            organization=organization,
+            opportunity_type=opportunity_type,
+            city=city,
+            delivery_mode=delivery_mode,
+            accepted_majors=majors,
+            technical_focus=True,
+            registration_open=True,
+            application_url=url,
+            source_url=url,
+            evidence=evidence,
+            publication_date=publication_date,
+            remote_allowed=delivery_mode != DeliveryMode.IN_PERSON,
+        )
+
+
+@dataclass(frozen=True)
+class ATSBoard:
+    """A public first-party applicant-tracking-system job board."""
+
+    provider: str
+    slug: str
+    organization: str
+
+
+class PublicATSConnector:
+    """Collect student and early-career technical roles from official ATS APIs.
+
+    The connector talks directly to the same public JSON endpoints used by the
+    employer's careers page. It does not scrape LinkedIn or bypass authentication.
+    """
+
+    def __init__(
+        self,
+        boards: list[ATSBoard],
+        client: httpx.Client | None = None,
+        *,
+        timeout: float = 20,
+    ) -> None:
+        self.boards = boards
+        self._owns_client = client is None
+        self.client = client or httpx.Client(
+            timeout=timeout,
+            follow_redirects=True,
+            headers={"User-Agent": "OpportunitySentinel/0.1 educational-research-bot"},
+        )
+
+    def collect(self) -> list[OpportunityCandidate]:
+        candidates: dict[str, OpportunityCandidate] = {}
+        for board in self.boards:
+            try:
+                rows = self._fetch_board(board)
+            except (httpx.HTTPError, ValueError, KeyError, TypeError):
+                continue
+            for row in rows:
+                candidate = self._candidate(board, row)
+                if candidate:
+                    candidates[str(candidate.application_url)] = candidate
+        return list(candidates.values())
+
+    def close(self) -> None:
+        if self._owns_client:
+            self.client.close()
+
+    def _fetch_board(self, board: ATSBoard) -> list[dict[str, Any]]:
+        provider = board.provider.casefold()
+        if provider == "ashby":
+            response = self.client.get(
+                f"https://api.ashbyhq.com/posting-api/job-board/{board.slug}"
+            )
+            response.raise_for_status()
+            return [row for row in response.json().get("jobs", []) if row.get("isListed", True)]
+        if provider == "lever":
+            response = self.client.get(
+                f"https://api.lever.co/v0/postings/{board.slug}",
+                params={"mode": "json", "limit": 100},
+            )
+            response.raise_for_status()
+            body = response.json()
+            return body if isinstance(body, list) else []
+        if provider == "greenhouse":
+            response = self.client.get(
+                f"https://boards-api.greenhouse.io/v1/boards/{board.slug}/jobs",
+                params={"content": "true"},
+            )
+            response.raise_for_status()
+            return response.json().get("jobs", [])
+        return []
+
+    def _candidate(
+        self, board: ATSBoard, row: dict[str, Any]
+    ) -> OpportunityCandidate | None:
+        normalized = _normalized_ats_row(board, row)
+        title = normalized["title"]
+        body = normalized["description"]
+        location = normalized["location"]
+        application_url = normalized["application_url"]
+        source_url = normalized["source_url"]
+        if not all((title, application_url, source_url)):
+            return None
+        opportunity_type = _ats_opportunity_type(
+            f"{title} {normalized['employment_type']} {body}"
+        )
+        if opportunity_type is None:
+            return None
+        technical_quote = _ats_technical_quote(title, body, normalized["department"])
+        if not technical_quote:
+            return None
+        city, delivery_mode = _ats_location(location, normalized["workplace_type"])
+        if delivery_mode != DeliveryMode.ONLINE and city != "الرياض":
+            return None
+        status_quote = normalized["status_quote"]
+        evidence = [
+            Evidence(
+                field_name="organization",
+                value=board.organization,
+                quote=board.organization,
+                source_url=source_url,
+                official_source=True,
+            ),
+            Evidence(
+                field_name="registration_status",
+                value="open",
+                quote=status_quote,
+                source_url=source_url,
+                official_source=True,
+            ),
+            Evidence(
+                field_name="technical_focus",
+                value="true",
+                quote=technical_quote,
+                source_url=source_url,
+                official_source=True,
+            ),
+        ]
+        if city:
+            evidence.append(
+                Evidence(
+                    field_name="city",
+                    value=city,
+                    quote=location or normalized["workplace_type"],
+                    source_url=source_url,
+                    official_source=True,
+                )
+            )
+        publication_date = _iso_date(normalized["publication_date"])
+        return OpportunityCandidate(
+            title=title[:300],
+            organization=board.organization,
+            opportunity_type=opportunity_type,
+            city=city,
+            delivery_mode=delivery_mode,
+            technical_focus=True,
+            registration_open=True,
+            application_url=application_url,
+            source_url=source_url,
+            evidence=evidence,
+            publication_date=publication_date,
+            remote_allowed=delivery_mode != DeliveryMode.IN_PERSON,
+        )
+
+
+def default_ats_boards() -> list[ATSBoard]:
+    """Curated official boards with a Saudi/Riyadh presence."""
+    return [
+        ATSBoard("ashby", "sarjai", "Sarj.ai"),
+        ATSBoard("ashby", "LeanTech", "Lean Technologies"),
+        ATSBoard("lever", "trendyol", "Trendyol"),
+        ATSBoard("lever", "infinitepl", "Infinite PL"),
+    ]
+
+
+def extract_linkedin_technical_training(page: SourcePage) -> OpportunityCandidate | None:
+    """Validate an active employer-controlled public LinkedIn training listing."""
+    folded_url = page.url.casefold()
+    content = page.content
+    folded = content.casefold()
+    if "linkedin.com/jobs/view" not in folded_url:
+        return None
+    if any(
+        marker in folded
+        for marker in (
+            "لم نعد نقبل طلبات التقدم",
+            "no longer accepting applications",
+            "job is no longer available",
+        )
+    ):
+        return None
+    open_quote = next(
+        (
+            marker
+            for marker in ("Apply", "التقدم", "انضم للتقدم")
+            if marker.casefold() in folded
+        ),
+        None,
+    )
+    technical_quote = next(
+        (
+            marker
+            for marker in (
+                "Computer Science",
+                "Information Technology",
+                "Software Engineering",
+                "Data Science",
+                "Artificial Intelligence",
+                "Cybersecurity",
+                "computer engineering",
+            )
+            if marker.casefold() in folded
+        ),
+        None,
+    )
+    training_marker = next(
+        (marker for marker in ("COOP", "Co-op", "Internship") if marker.casefold() in folded),
+        None,
+    )
+    city_quote = next(
+        (marker for marker in ("Riyadh", "الرياض") if marker.casefold() in folded), None
+    )
+    if not all((open_quote, technical_quote, training_marker, city_quote)):
+        return None
+    organization, title = _linkedin_title_parts(page.title)
+    if not organization or not title:
+        return None
+    opportunity_type = (
+        OpportunityType.COOP
+        if any(marker in folded for marker in ("coop", "co-op", "تعاوني"))
+        else OpportunityType.INTERNSHIP
+    )
+    evidence = [
+        Evidence(
+            field_name=field,
+            value=value,
+            quote=quote,
+            source_url=page.url,
+            # LinkedIn job pages are controlled by the named employer and expose the
+            # live application state. They are trusted recruitment-platform evidence.
+            official_source=True,
+        )
+        for field, value, quote in [
+            ("organization", organization, organization),
+            ("city", "الرياض", city_quote),
+            ("registration_status", "open", open_quote),
+            ("technical_focus", "true", technical_quote),
+        ]
+    ]
+    return OpportunityCandidate(
+        title=title,
+        organization=organization,
+        opportunity_type=opportunity_type,
+        city="الرياض",
+        delivery_mode=DeliveryMode.IN_PERSON,
+        technical_focus=True,
+        registration_open=True,
+        application_url=page.url,
+        source_url=page.url,
+        evidence=evidence,
+    )
+
+
+def _linkedin_title_parts(value: str) -> tuple[str | None, str | None]:
+    normalized = value.replace("\u200f", "").replace("\u200e", "").replace("‏", "").strip()
+    english = re.match(r"(.+?)\s+hiring\s+(.+?)\s+in\s+", normalized, re.I)
+    if english:
+        return english.group(1).strip(), english.group(2).strip()
+    arabic = re.match(r"تقوم شركة\s+(.+?)\s+بالتوظيف لوظيفة\s+(.+?)\s+في\s+", normalized)
+    if arabic:
+        return arabic.group(1).strip(), arabic.group(2).strip()
+    return None, None
+
+
+def _normalized_ats_row(board: ATSBoard, row: dict[str, Any]) -> dict[str, str]:
+    provider = board.provider.casefold()
+    if provider == "ashby":
+        locations = [str(row.get("location") or "")]
+        locations.extend(
+            str(item.get("location") or "")
+            for item in row.get("secondaryLocations", [])
+            if isinstance(item, dict)
+        )
+        return {
+            "title": str(row.get("title") or "").strip(),
+            "description": _plain_text(
+                str(row.get("descriptionPlain") or row.get("descriptionHtml") or "")
+            ),
+            "location": ", ".join(item for item in locations if item),
+            "department": " ".join(
+                str(row.get(key) or "") for key in ("department", "team")
+            ),
+            "employment_type": str(row.get("employmentType") or ""),
+            "workplace_type": str(row.get("workplaceType") or ""),
+            "application_url": str(row.get("applyUrl") or row.get("jobUrl") or ""),
+            "source_url": str(row.get("jobUrl") or row.get("applyUrl") or ""),
+            "publication_date": str(row.get("publishedAt") or ""),
+            "status_quote": "isListed: true",
+        }
+    if provider == "lever":
+        categories = row.get("categories") if isinstance(row.get("categories"), dict) else {}
+        list_text = " ".join(
+            _plain_text(str(item.get("content") or ""))
+            for item in row.get("lists", [])
+            if isinstance(item, dict)
+        )
+        return {
+            "title": str(row.get("text") or "").strip(),
+            "description": _plain_text(
+                " ".join(
+                    [
+                        str(row.get("descriptionPlain") or row.get("description") or ""),
+                        list_text,
+                    ]
+                )
+            ),
+            "location": str(categories.get("location") or ""),
+            "department": " ".join(
+                str(categories.get(key) or "") for key in ("department", "team")
+            ),
+            "employment_type": str(categories.get("commitment") or ""),
+            "workplace_type": str(row.get("workplaceType") or ""),
+            "application_url": str(row.get("applyUrl") or row.get("hostedUrl") or ""),
+            "source_url": str(row.get("hostedUrl") or row.get("applyUrl") or ""),
+            "publication_date": "",
+            "status_quote": "applyUrl: " + str(row.get("applyUrl") or "open"),
+        }
+    location = row.get("location") if isinstance(row.get("location"), dict) else {}
+    return {
+        "title": str(row.get("title") or "").strip(),
+        "description": _plain_text(str(row.get("content") or "")),
+        "location": str(location.get("name") or ""),
+        "department": " ".join(
+            str(item.get("name") or "")
+            for item in row.get("departments", [])
+            if isinstance(item, dict)
+        ),
+        "employment_type": "",
+        "workplace_type": "",
+        "application_url": str(row.get("absolute_url") or ""),
+        "source_url": str(row.get("absolute_url") or ""),
+        "publication_date": str(row.get("updated_at") or ""),
+        "status_quote": "absolute_url: " + str(row.get("absolute_url") or "open"),
+    }
+
+
+def _plain_text(value: str) -> str:
+    return " ".join(BeautifulSoup(unescape(value), "html.parser").get_text(" ", strip=True).split())
+
+
+def _ats_opportunity_type(text: str) -> OpportunityType | None:
+    folded = text.casefold()
+    if any(marker in folded for marker in ("coop", "co-op", "cooperative training", "تعاوني")):
+        return OpportunityType.COOP
+    if any(marker in folded for marker in ("part-time", "part time", "دوام جزئي")):
+        return OpportunityType.PART_TIME_JOB
+    if any(
+        marker in folded
+        for marker in (
+            "graduate program",
+            "graduate programme",
+            "new grad",
+            "fresh graduate",
+            "تمهير",
+            "خريجين",
+        )
+    ):
+        return OpportunityType.GRADUATE_PROGRAM
+    internship_markers = ("internship", "intern ", "intern,", "intern-", "متدرب", "تدريب")
+    if any(marker in folded for marker in internship_markers):
+        return OpportunityType.INTERNSHIP
+    if any(marker in folded for marker in ("entry level", "entry-level", "junior", "مبتدئ")):
+        return OpportunityType.ENTRY_LEVEL_JOB
+    return None
+
+
+def _ats_technical_quote(title: str, description: str, department: str) -> str | None:
+    text = f"{title} {department} {description}"
+    folded = text.casefold()
+    technical_markers = (
+        "software",
+        "developer",
+        "engineering intern",
+        "computer science",
+        "computer engineering",
+        "information technology",
+        "data & ai",
+        "data science",
+        "data engineering",
+        "machine learning",
+        "artificial intelligence",
+        "cybersecurity",
+        "cyber security",
+        "cloud engineering",
+        "product engineering",
+        "هندسة البرمجيات",
+        "علوم الحاسب",
+        "هندسة الحاسب",
+        "تقنية المعلومات",
+        "ذكاء اصطناعي",
+        "علم البيانات",
+        "أمن سيبراني",
+        "برمجة",
+    )
+    marker = next((item for item in technical_markers if item in folded), None)
+    if not marker:
+        return None
+    start = max(0, folded.find(marker) - 80)
+    return text[start : start + 500]
+
+
+def _ats_location(location: str, workplace_type: str) -> tuple[str | None, DeliveryMode]:
+    text = f"{location} {workplace_type}".casefold()
+    if any(marker in text for marker in ("remote", "عن بعد")):
+        return "عن بُعد", DeliveryMode.ONLINE
+    if any(marker in text for marker in ("riyadh", "الرياض", "diriyah", "الدرعية")):
+        return "الرياض", DeliveryMode.IN_PERSON
+    return None, DeliveryMode.IN_PERSON
+
+
+def _iso_date(value: str) -> date | None:
+    match = re.match(r"(\d{4}-\d{2}-\d{2})", value)
+    if not match:
+        return None
+    try:
+        return date.fromisoformat(match.group(1))
+    except ValueError:
+        return None
+
+
+def _clean_text(node) -> str:
+    return " ".join(node.get_text(" ", strip=True).split())
+
+
+def _ksu_job_attributes(main) -> dict[str, str]:
+    attributes: dict[str, str] = {}
+    for row in main.select("div.d-flex.flex-stack"):
+        label = row.select_one(":scope > div.text-gray-700")
+        value = row.select_one(":scope > div.d-flex span")
+        if label and value:
+            attributes.setdefault(_clean_text(label), _clean_text(value))
+    return attributes
+
+
+def _split_values(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip() and item.strip() != "--"]
+
+
+def _normalized_ksu_majors(value: str) -> list[str]:
+    normalized: list[str] = []
+    for raw in _split_values(value):
+        folded = raw.casefold()
+        if "هندسة البرمجيات" in folded:
+            item = "هندسة البرمجيات"
+        elif "هندسة الحاسب" in folded or "هندسة حاسب" in folded:
+            item = "هندسة الحاسب"
+        elif "الأمن السيبراني" in folded or "الامن السيبراني" in folded:
+            item = "الأمن السيبراني"
+        elif "تقنية المعلومات" in folded:
+            item = "تقنية المعلومات"
+        elif "علم البيانات" in folded:
+            item = "علم البيانات"
+        elif "الذكاء الاصطناعي" in folded:
+            item = "الذكاء الاصطناعي"
+        elif "علوم الحاسب" in folded and "نظم المعلومات" not in folded:
+            item = "علوم الحاسب"
+        else:
+            item = raw
+        if item not in normalized:
+            normalized.append(item)
+    return normalized
+
+
+def _ksu_opportunity_type(title: str, description: str) -> OpportunityType:
+    text = f"{title} {description}".casefold()
+    if any(marker in text for marker in ("تدريب تعاوني", "coop", "co-op")):
+        return OpportunityType.COOP
+    if any(marker in text for marker in ("دوام جزئي", "part-time", "part time")):
+        return OpportunityType.PART_TIME_JOB
+    if any(
+        marker in text
+        for marker in ("تمهير", "برنامج خريجين", "تطوير الخريجين", "graduate program")
+    ):
+        return OpportunityType.GRADUATE_PROGRAM
+    if any(marker in text for marker in ("internship", "intern ", "تدريب", "متدرب")):
+        return OpportunityType.INTERNSHIP
+    return OpportunityType.ENTRY_LEVEL_JOB
+
+
+def _ksu_technical_quote(
+    title: str,
+    description: str,
+    colleges: list[str],
+    majors: list[str],
+    opportunity_type: OpportunityType,
+) -> str | None:
+    folded_all = f"{title} {description}".casefold()
+    non_computing_roles = (
+        "مبيعات تقنية",
+        "مبيعات تقنيه",
+        "أنظمة انذار",
+        "انظمة انذار",
+        "إنذار الحريق",
+        "انذار الحريق",
+        "medical technology",
+    )
+    if any(marker in folded_all for marker in non_computing_roles):
+        return None
+    title_markers = (
+        "برمجيات",
+        "مبرمج",
+        "علوم الحاسب",
+        "هندسة الحاسب",
+        "تقنية المعلومات",
+        "نظم المعلومات",
+        "حماية بيانات",
+        "تحليل بيانات",
+        "هندسة بيانات",
+        "علم البيانات",
+        "ذكاء اصطناعي",
+        "سيبراني",
+        "شبكات",
+        "دعم فني",
+        "إلكترون",
+        "software",
+        "computer",
+        "information technology",
+        "cyber",
+        "machine learning",
+        "artificial intelligence",
+        "developer",
+        "programmer",
+        "network engineer",
+        "data engineer",
+        "data analyst",
+    )
+    if any(marker in title.casefold() for marker in title_markers):
+        return title[:1000]
+
+    description_markers = (
+        "تطوير البرمجيات",
+        "برمجة",
+        "علوم الحاسب",
+        "هندسة الحاسب",
+        "تقنية المعلومات",
+        "نظم المعلومات",
+        "قواعد البيانات",
+        "تحليل البيانات",
+        "هندسة البيانات",
+        "علم البيانات",
+        "الذكاء الاصطناعي",
+        "الأمن السيبراني",
+        "الشبكات",
+        "software engineering",
+        "computer science",
+        "information technology",
+        "cybersecurity",
+        "machine learning",
+        "artificial intelligence",
+        "data engineering",
+        "data analysis",
+    )
+    if any(marker in description.casefold() for marker in description_markers):
+        return description[:1000]
+
+    technical_majors = [
+        major
+        for major in majors
+        if any(marker in major.casefold() for marker in title_markers)
+    ]
+    training_types = {
+        OpportunityType.INTERNSHIP,
+        OpportunityType.COOP,
+        OpportunityType.GRADUATE_PROGRAM,
+    }
+    if opportunity_type in training_types and technical_majors:
+        ratio = len(technical_majors) / max(1, len(majors))
+        technical_college = any("علوم الحاسب" in college for college in colleges)
+        if ratio >= 0.75 or (technical_college and ratio >= 0.5):
+            return ", ".join(technical_majors)[:1000]
+    return None
+
+
+def _ksu_location(value: str) -> tuple[str | None, DeliveryMode]:
+    folded = value.casefold()
+    if any(marker in folded for marker in ("remote", "عن بعد")):
+        return "عن بُعد", DeliveryMode.ONLINE
+    if any(marker in folded for marker in ("riyadh", "الرياض", "diriyah", "الدرعية")):
+        return "الرياض", DeliveryMode.IN_PERSON
+    return None, DeliveryMode.IN_PERSON
+
+
+def _ksu_publication_date(main) -> date | None:
+    match = re.search(r"تم النشر\s*(\d{4}-\d{2}-\d{2})", _clean_text(main))
+    if not match:
+        return None
+    try:
+        return date.fromisoformat(match.group(1))
+    except ValueError:
+        return None
+
+
+def _page_text(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "noscript", "svg"]):
+        tag.decompose()
+    return " ".join(soup.get_text(" ", strip=True).split())
+
+
+def _course_title(soup: BeautifulSoup, fallback: str) -> str:
+    if not soup.title or not soup.title.string:
+        return fallback
+    return soup.title.string.split(" | ", 1)[0].strip()
+
+
+def _provider_name(soup: BeautifulSoup) -> str | None:
+    label = soup.find(string=lambda value: bool(value and "مقدم من:" in value))
+    if not label:
+        return None
+    next_span = label.parent.find_next("span") if label.parent else None
+    return next_span.get_text(" ", strip=True) if next_span else None
+
+
+def _arabic_course_date(value: str) -> date:
+    return datetime.strptime(value, "%d-%m-%Y").date()
+
+
+def _delivery_quote(text: str) -> str | None:
+    for marker in ("طريقة توصيل الدورة تفاعلية مباشرة", "تفاعلية مباشرة"):
+        if marker in text:
+            return marker
+    return None
+
+
+def _requirements(text: str) -> list[tuple[str, str]]:
+    known = [
+        ("saudi_national", "سعودي الجنسية"),
+        ("degree_level", "دبلوم وما اعلى"),
+        ("degree_level", "دبلوم وما أعلى"),
+        ("english_level", "لغة انجليزية متوسطة"),
+        ("english_level", "لغة إنجليزية متوسطة"),
+        ("has_computer", "جهاز كومبيوتر"),
+        ("has_computer", "جهاز كمبيوتر"),
+    ]
+    found: dict[str, str] = {}
+    for key, quote in known:
+        if quote in text:
+            found.setdefault(key, quote)
+    return list(found.items())
+
+
+def _requirement_rules(
+    requirements: list[tuple[str, str]],
+) -> list[tuple[str, str, bool | list[str]]]:
+    values: dict[str, bool | list[str]] = {
+        "saudi_national": True,
+        "degree_level": ["diploma", "bachelor", "graduate"],
+        "english_level": ["intermediate", "advanced"],
+        "has_computer": True,
+    }
+    return [(key, quote, values[key]) for key, quote in requirements]

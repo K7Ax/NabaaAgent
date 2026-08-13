@@ -1,0 +1,50 @@
+# NabaaAgent production architecture
+
+## Runtime boundary
+
+Railway owns the durable SQLite volume, Telegram webhook, matching, lifecycle, and
+delivery queue. GitHub Actions is stateless and only performs scheduled collection.
+All mutations sent by Actions use `HMAC-SHA256(timestamp + "." + body)` and are rejected
+after five minutes. Telegram uses its independent webhook secret header.
+
+## Opportunity lifecycle
+
+`signal → needs_evidence → verified_open → closing_soon → expired`
+
+Rejected and stale are terminal/withheld states. `opportunity_versions` retains every
+material payload change. Evidence is additionally normalized into `evidence_records`.
+Canonical application URL is the primary identity, with content hashing for versioning.
+
+## Matching policy
+
+Hard gates run before ranking: current status, category, major breadth, graduation year,
+location/mode, and structured mandatory requirements. A missing mandatory profile fact
+creates `needs_confirmation`. It never creates an eligible match.
+
+Ranking weights are major 35, category 20, location 15, academic timing 10, skills 10,
+and freshness/urgency 10. Scores of 80+ are immediate; 60–79 join the 18:00 Riyadh
+digest. Closing opportunities can become immediate from 60.
+
+## Cost controls
+
+The half-hour collector calls first-party Tuwaiq, Future Skills, KSU Alumni Gate, and
+Financial Academy endpoints, plus public employer ATS APIs from Ashby, Lever, and
+Greenhouse. It uses no LLM or search provider. Deep discovery runs a six-query category
+matrix. Before every Tavily basic call, the collector asks Railway to reserve one credit.
+At three cycles per day this is approximately 540 credits per 30-day month, leaving a
+safety reserve under the 900-credit cap. The persistent counter refuses reservations
+beyond the configured limit. LLM extraction results remain associated with source
+content; deterministic structured adapters do not invoke an LLM.
+
+## Operations
+
+- `/health`: process liveness.
+- `/readiness`: database, Telegram, webhook, provider configuration, and counts.
+- `/internal/ingest/batch`: verified candidate ingestion boundary.
+- `/internal/quota/reserve`: persistent provider budget gate.
+- `/internal/revalidate`: deadline and official-link revalidation.
+- `/internal/deliver`: throttled immediate and digest delivery.
+- `/internal/metrics`: protected platform counters.
+
+If an official application page is unreachable, delivery remains pending for retry. If
+the page is closed, the opportunity expires and all pending deliveries are cancelled.

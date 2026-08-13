@@ -15,17 +15,5 @@ services:
       timeout: 3s
       retries: 3
 
-  bot:
-    build: .
-    command: ["opportunity-bot"]
-    env_file: .env
-    environment:
-      APP_ENV: production
-      CHECKPOINT_DB_PATH: /app/data/opportunity_checkpoints.sqlite
-      DATA_DB_PATH: /app/data/opportunity_sentinel.db
-    volumes:
-      - opportunity_data:/app/data
-    restart: unless-stopped
-
 volumes:
   opportunity_data:

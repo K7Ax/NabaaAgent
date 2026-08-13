@@ -26,4 +26,3 @@ def verified_page(future_deadline: str) -> SourcePage:
             "apply: https://official.example/apply"
         ),
     )
-

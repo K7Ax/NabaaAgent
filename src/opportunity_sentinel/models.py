@@ -9,6 +9,15 @@ class OpportunityType(StrEnum):
     INTERNSHIP = "internship"
     COOP = "coop"
     COURSE = "course"
+    GRADUATE_PROGRAM = "graduate_program"
+    PART_TIME_JOB = "part_time_job"
+    ENTRY_LEVEL_JOB = "entry_level_job"
+    BOOTCAMP = "bootcamp"
+    SCHOLARSHIP = "scholarship"
+    COMPETITION = "competition"
+    HACKATHON = "hackathon"
+    EVENT = "event"
+    VOLUNTEERING = "volunteering"
 
 
 class DeliveryMode(StrEnum):
@@ -22,6 +31,16 @@ class VerificationStatus(StrEnum):
     NEEDS_RESEARCH = "needs_research"
     NEEDS_HUMAN_REVIEW = "needs_human_review"
     VERIFIED = "verified"
+    REJECTED = "rejected"
+
+
+class OpportunityLifecycle(StrEnum):
+    SIGNAL = "signal"
+    NEEDS_EVIDENCE = "needs_evidence"
+    VERIFIED_OPEN = "verified_open"
+    CLOSING_SOON = "closing_soon"
+    STALE = "stale"
+    EXPIRED = "expired"
     REJECTED = "rejected"
 
 
@@ -47,6 +66,16 @@ class OpportunityCandidate(BaseModel):
     application_url: HttpUrl
     source_url: HttpUrl
     evidence: list[Evidence] = Field(default_factory=list)
+    publication_date: date | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    degree_levels: list[str] = Field(default_factory=list)
+    requirements: dict[str, str | int | float | bool | list[str]] = Field(default_factory=dict)
+    skills: list[str] = Field(default_factory=list)
+    technical_focus: bool | None = None
+    is_free: bool | None = None
+    compensation: str | None = None
+    remote_allowed: bool | None = None
 
     def evidence_for(self, field_name: str) -> list[Evidence]:
         return [item for item in self.evidence if item.field_name == field_name]
@@ -73,11 +102,19 @@ class StudentProfile(BaseModel):
     graduation_year: int
     preferred_types: set[OpportunityType] = Field(default_factory=set)
     accepts_online: bool = True
+    university: str = "King Saud University"
+    college: str | None = None
+    degree_level: str = "bachelor"
+    preferred_cities: set[str] = Field(default_factory=lambda: {"جميع مدن السعودية"})
+    notification_mode: str = "immediate_and_daily"
+    profile_answers: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
 
 class EligibilityDecision(BaseModel):
     eligible: bool
     reasons: list[str] = Field(default_factory=list)
+    unknown_requirements: list[str] = Field(default_factory=list)
+    score: int = Field(default=0, ge=0, le=100)
 
 
 class ToolObservation(BaseModel):

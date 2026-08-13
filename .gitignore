@@ -3,6 +3,8 @@
 __pycache__/
 *.py[cod]
 *.db
+*.db-shm
+*.db-wal
 *.sqlite*
 .pytest_cache/
 .ruff_cache/

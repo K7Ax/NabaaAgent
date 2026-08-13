@@ -1,63 +1,43 @@
-# Telegram setup and live run
+# إعداد Telegram وRailway
 
-## 1. Create the bot
+## إنشاء البوت والمشرف
 
-1. Open the verified `@BotFather` account in Telegram.
-2. Send `/newbot` and choose the display name and username.
-3. Copy the HTTP API token into `TELEGRAM_BOT_TOKEN` in the local `.env` file.
-4. Do not put the token in source code, screenshots, commits, or chat messages.
+1. أنشئ البوت من الحساب الموثق `@BotFather` واحفظ token في مكان آمن.
+2. أرسل رسالة للبوت، ثم استخرج رقم حساب المشرف مرة واحدة عبر `getUpdates` قبل
+   تسجيل Webhook.
+3. خزّن القيمتين في Railway باسم `TELEGRAM_BOT_TOKEN` و`TELEGRAM_ADMIN_CHAT_ID`.
+4. لا تضع token في Git أو صورة أو سجل تشغيل.
 
-## 2. Find the administrator chat ID
+## Webhook الإنتاجي
 
-The administrator receives uncertain opportunities and can approve, reject, or request
-another research cycle. Set `TELEGRAM_ADMIN_CHAT_ID` to the numeric Telegram ID of the
-project owner. One direct method is:
-
-1. Send any message to the new bot.
-2. Locally open `https://api.telegram.org/bot<TOKEN>/getUpdates` in a browser.
-3. Find `message.from.id` in the JSON response and copy only that number into `.env`.
-4. Close the page; do not share its address because it contains the bot token.
-
-Telegram account IDs are used as the application identity. Administrator callbacks also
-enforce this configured ID, so another user cannot approve an opportunity by crafting a
-callback.
-
-## 3. Configure free LLM providers
-
-Create a Groq API key and an OpenRouter API key in their official dashboards, then place
-them in `.env`. At least one is required for live extraction. Both are recommended because
-the model router automatically falls back when the first provider is rate limited or
-unavailable.
-
-Default model configuration:
+أنشئ قيمتين عشوائيتين مختلفتين وطويلتين:
 
 ```dotenv
-GROQ_MODEL=openai/gpt-oss-20b
-OPENROUTER_MODEL=openrouter/free
+PUBLIC_BASE_URL=https://YOUR-SERVICE.up.railway.app
+TELEGRAM_WEBHOOK_SECRET=...
+INTERNAL_API_SECRET=...
 ```
 
-## 4. Launch and verify
+عند بدء FastAPI يسجّل `/telegram/webhook` تلقائيًا مع Telegram. كل تحديث يجب أن
+يحمل header السري الرسمي، وإلا يعيد الخادم 401. لا تشغّل Long Polling بالتزامن مع
+Webhook.
 
-```powershell
-.venv\Scripts\opportunity-bot.exe
-```
+## تجربة الطالب
 
-Expected flow:
+1. يضغط `/start` مرة واحدة.
+2. يختار الجامعة والكلية والتخصص وسنة التخرج بالأزرار.
+3. يختار عدة أنواع فرص ثم يضغط **تم الاختيار**.
+4. **فرصي الآن** يعرض قاعدة الفرص الموثقة فورًا دون بحث خارجي بطيء.
+5. **تأكيد أهليتي** يسأل فقط عن الشروط الناقصة للفرص الفعلية.
+6. يستطيع حفظ الفرصة أو إخفاءها أو فتح صفحة التقديم الرسمية.
 
-1. Press **Start**.
-2. Select the major, graduation year, and opportunity type with buttons.
-3. Press **ابحث عن فرصة**.
-4. A complete, official, matching opportunity is shown with **التقديم** and **حفظ**.
-5. An uncertain result goes to the administrator; the student's workflow resumes after
-   the administrator presses one of the review buttons.
+## الفحص
 
-The only typed Telegram command is the platform's initial `/start`. Every interaction
-after entry is performed through inline buttons.
+- `/health` يجب أن يعيد 200.
+- `/readiness` يجب أن يظهر `database_ready` و`webhook_configured` بقيمة `true`.
+- من GitHub Actions شغّل `Central Opportunity Discovery` بوضع `fast`.
+- افحص أن `signals` و`opportunities` ظهرت في metrics.
+- شغّل وضع `deliver` بعد وجود طالب وفرصة مطابقة.
 
-## 5. Troubleshooting
-
-- `TELEGRAM_BOT_TOKEN is required`: the token is missing from `.env`.
-- `GROQ_API_KEY or OPENROUTER_API_KEY is required`: configure at least one provider.
-- No administrator review message: verify the numeric admin ID and message the bot once.
-- A result is withheld: inspect structured logs for missing evidence, expiry, scope,
-  eligibility, or a prompt-injection event. Withholding is expected safety behavior.
+إذا لم تصل رسالة، راجع Telegram token وWebhook secret، ثم حالة رابط التقديم. نبأ
+يؤجل الإرسال عمدًا عندما لا يستطيع إعادة فتح الرابط الرسمي.

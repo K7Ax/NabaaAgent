@@ -11,11 +11,7 @@ from opportunity_sentinel.telegram_bot import _initial_state, create_runtime
 
 def main() -> None:
     runtime = create_runtime(
-        Settings(
-            checkpoint_db_path=Path(
-                f"artifacts/live-workflow-{uuid.uuid4().hex[:10]}.sqlite"
-            )
-        )
+        Settings(checkpoint_db_path=Path(f"artifacts/live-workflow-{uuid.uuid4().hex[:10]}.sqlite"))
     )
     profiles = runtime.repository.list_profiles()
     if not profiles:
@@ -42,9 +38,7 @@ def main() -> None:
         "verification": result.get("verification"),
         "eligibility": result.get("eligibility"),
         "verified_result_count": len(collected),
-        "verified_sources": [
-            item.get("candidate", {}).get("source_url") for item in collected
-        ],
+        "verified_sources": [item.get("candidate", {}).get("source_url") for item in collected],
         "tools_used": [item.get("tool") for item in observations],
         "tool_observations": observations,
     }

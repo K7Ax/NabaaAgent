@@ -3,7 +3,68 @@ import json
 import httpx
 
 import opportunity_sentinel.tools as tools_module
-from opportunity_sentinel.tools import WebResearchTools, _is_public_address, _looks_official
+from opportunity_sentinel.agents import DiscoveryAgent, VerificationAgent
+from opportunity_sentinel.models import OpportunityType, VerificationStatus
+from opportunity_sentinel.tools import (
+    InMemoryResearchTools,
+    SourcePage,
+    WebResearchTools,
+    _is_public_address,
+    _looks_official,
+)
+
+
+def test_blank_structured_major_does_not_capture_next_line() -> None:
+    page = SourcePage(
+        url="https://tuwaiq.edu.sa/bootcamp/example/view",
+        title="Official program without a stated major",
+        official=True,
+        content=(
+            "OPPORTUNITY_SENTINEL_STRUCTURED_SOURCE\n"
+            "organization: أكاديمية طويق\n"
+            "type: course\n"
+            "city: عن بعد\n"
+            "mode: online\n"
+            "majors: \n"
+            "deadline: 2099-01-01\n"
+            "registration_status: open\n"
+            "apply: https://tuwaiq.edu.sa/bootcamp/example/view"
+        ),
+    )
+    candidate = DiscoveryAgent(InMemoryResearchTools([page])).extract(page.__dict__)
+    assert candidate is not None
+    assert candidate.accepted_majors == []
+    assert not candidate.evidence_for("accepted_majors")
+
+
+def test_structured_technical_evidence_can_replace_unspecified_majors() -> None:
+    page = SourcePage(
+        url="https://tuwaiq.edu.sa/bootcamp/example/view",
+        title="برنامج Python",
+        official=True,
+        content=(
+            "OPPORTUNITY_SENTINEL_STRUCTURED_SOURCE\n"
+            "organization: أكاديمية طويق\n"
+            "type: bootcamp\n"
+            "city: الرياض\n"
+            "mode: in_person\n"
+            "majors: \n"
+            "deadline: 2099-01-01\n"
+            "registration_status: open\n"
+            "cost: free\n"
+            "technical_focus: true\n"
+            "technical_evidence: برنامج تطوير البرمجيات باستخدام Python\n"
+            "apply: https://tuwaiq.edu.sa/bootcamp/example/view"
+        ),
+    )
+
+    candidate = DiscoveryAgent(InMemoryResearchTools([page])).extract(page.__dict__)
+
+    assert candidate is not None
+    assert candidate.opportunity_type == OpportunityType.BOOTCAMP
+    assert candidate.technical_focus is True
+    assert candidate.evidence_for("technical_focus")
+    assert VerificationAgent().verify(candidate).status == VerificationStatus.VERIFIED
 
 
 def test_non_public_address_classes_are_blocked() -> None:
@@ -77,12 +138,129 @@ def test_tavily_is_a_structured_observable_search_tool(monkeypatch) -> None:
     research = WebResearchTools(tavily_api_key="redacted-test-key")
     research.client = httpx.Client(transport=httpx.MockTransport(handler))
 
-    pages, observation = research.search_web(
-        "technical courses Riyadh -site:tuwaiq.edu.sa"
-    )
+    pages, observation = research.search_web("technical courses Riyadh -site:tuwaiq.edu.sa")
 
     assert len(pages) == 1
     assert pages[0].content.startswith("TAVILY_EXTRACTED_SOURCE")
     assert observation.tool == "tavily_search"
     assert observation.metadata["credits"] == 2
     assert observation.metadata["request_id"] == "request-123"
+
+
+def test_tuwaiq_connector_paginates_and_preserves_official_category() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/GetInitiativePublishesShorten/20/1"):
+            return httpx.Response(
+                200,
+                json={
+                    "pagination": {"totalPages": 2},
+                    "data": [
+                        {
+                            "id": "current",
+                            "slug": "technical-camp",
+                            "title": "معسكر تطوير البرمجيات",
+                            "initiativeCategoryName": "معسكر",
+                            "isOpen": True,
+                            "isRegistrationOpen": True,
+                            "isRegistrationClosed": False,
+                            "isPaid": False,
+                            "registrationEndDate": "2099-01-01T12:00:00+03:00",
+                        }
+                    ],
+                },
+            )
+        if request.url.path.endswith("/GetInitiativePublishesShorten/20/2"):
+            return httpx.Response(
+                200,
+                json={
+                    "pagination": {"totalPages": 2},
+                    "data": [
+                        {
+                            "id": "past",
+                            "slug": "past",
+                            "registrationEndDate": "2020-01-01T12:00:00+03:00",
+                        }
+                    ],
+                },
+            )
+        if request.url.path.endswith("/GetInitiativePublishBySlug/technical-camp"):
+            return httpx.Response(
+                200,
+                json={
+                    "title": "معسكر تطوير البرمجيات",
+                    "description": "تطوير تطبيقات الويب باستخدام Python",
+                    "initiativeCategoryName": "معسكر",
+                    "locationName": "الرياض - المقر الرئيسي",
+                    "registrationEndDate": "2099-01-01T12:00:00+03:00",
+                    "requirements": [],
+                },
+            )
+        return httpx.Response(404)
+
+    research = WebResearchTools()
+    research.client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    pages, observation = research.search_web("برامج مفتوحة site:tuwaiq.edu.sa")
+
+    assert observation.success is True
+    assert len(pages) == 1
+    assert "type: bootcamp" in pages[0].content
+    assert "technical_focus: true" in pages[0].content
+
+
+def test_tavily_converts_positive_site_operators_to_domain_filters(monkeypatch) -> None:
+    def resolve(host: str, port: int):
+        return [(0, 0, 0, "", ("93.184.216.34", port))]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["include_domains"] == ["linkedin.com", "x.com"]
+        return httpx.Response(200, json={"results": [], "usage": {"credits": 2}})
+
+    monkeypatch.setattr(tools_module, "getaddrinfo", resolve)
+    research = WebResearchTools(tavily_api_key="redacted-test-key")
+    research.client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    research.search_web("فرص تقنية site:linkedin.com site:x.com")
+
+
+def test_tavily_basic_reserves_one_credit_and_requests_twenty_results(monkeypatch) -> None:
+    reserved: list[int] = []
+
+    monkeypatch.setattr(
+        tools_module,
+        "getaddrinfo",
+        lambda host, port: [(0, 0, 0, "", ("93.184.216.34", port))],
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["search_depth"] == "basic"
+        assert payload["max_results"] == 20
+        assert "chunks_per_source" not in payload
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "title": "Technical internship",
+                        "url": "https://careers.example/internship",
+                        "content": "Apply",
+                    }
+                ],
+                "usage": {"credits": 1},
+            },
+        )
+
+    research = WebResearchTools(
+        max_results=20,
+        tavily_api_key="redacted-test-key",
+        tavily_quota_guard=lambda units: reserved.append(units) is None,
+        tavily_search_depth="basic",
+    )
+    research.client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    _, observation = research.search_web("technical internships Riyadh")
+
+    assert reserved == [1]
+    assert observation.metadata["search_depth"] == "basic"
