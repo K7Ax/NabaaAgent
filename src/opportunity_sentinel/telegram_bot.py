@@ -1097,4 +1097,7 @@ async def collection_loop(bot: Bot, runtime: BotRuntime) -> None:
 
 
 def main() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     asyncio.run(run_bot())
