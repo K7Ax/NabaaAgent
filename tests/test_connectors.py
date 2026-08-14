@@ -13,7 +13,9 @@ from opportunity_sentinel.connectors import (
     PublicATSConnector,
     _ats_location,
     _ats_opportunity_type,
+    _ats_remote_scope_allowed,
     _iso_date,
+    default_ats_boards,
     extract_linkedin_technical_training,
 )
 from opportunity_sentinel.models import DeliveryMode, OpportunityType, VerificationStatus
@@ -363,7 +365,19 @@ def test_public_ats_connector_normalizes_three_official_providers() -> None:
                         "hostedUrl": "https://jobs.lever.co/company/job-2",
                         "applyUrl": "https://jobs.lever.co/company/job-2/apply",
                         "workplaceType": "on-site",
-                    }
+                    },
+                    {
+                        "text": "AI/ML Data Contributor",
+                        "descriptionPlain": "Remote machine learning data work in the USA.",
+                        "categories": {
+                            "location": "Oklahoma City, OK",
+                            "department": "AI/ML Data Collection",
+                            "commitment": "Contract Part time",
+                        },
+                        "hostedUrl": "https://jobs.lever.co/company/us-only",
+                        "applyUrl": "https://jobs.lever.co/company/us-only/apply",
+                        "workplaceType": "remote",
+                    },
                 ],
             )
         return httpx.Response(
@@ -407,6 +421,15 @@ def test_public_ats_connector_normalizes_three_official_providers() -> None:
     client.close()
 
 
+def test_default_ats_boards_have_independent_health_identities() -> None:
+    boards = default_ats_boards()
+
+    assert len(boards) == 7
+    assert {board.organization for board in boards} >= {"Tamara", "HALA", "TSMG"}
+    assert all(board.source_id for board in boards)
+    assert len({board.source_id for board in boards}) == len(boards)
+
+
 def test_ats_taxonomy_covers_early_career_types_and_locations() -> None:
     assert _ats_opportunity_type("Software CO-OP") == OpportunityType.COOP
     assert _ats_opportunity_type("Developer part-time") == OpportunityType.PART_TIME_JOB
@@ -415,5 +438,8 @@ def test_ats_taxonomy_covers_early_career_types_and_locations() -> None:
     assert _ats_opportunity_type("Senior accountant") is None
     assert _ats_location("Saudi Arabia", "remote") == ("عن بُعد", DeliveryMode.ONLINE)
     assert _ats_location("Jeddah", "on-site") == (None, DeliveryMode.IN_PERSON)
+    assert _ats_remote_scope_allowed("Saudi Arabia") is True
+    assert _ats_remote_scope_allowed("Middle East") is True
+    assert _ats_remote_scope_allowed("Oklahoma City, OK") is False
     assert _iso_date("2026-08-13T12:00:00Z") == date(2026, 8, 13)
     assert _iso_date("not-a-date") is None

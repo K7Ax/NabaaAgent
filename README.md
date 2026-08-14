@@ -95,7 +95,7 @@ Workflow المسمى `Central Opportunity Discovery` ينفذ:
 
 - `fast`: موصلات طويق (API ثم القناة الرسمية عند حجب Cloudflare)، مهارات المستقبل،
   كتالوج مسك، أخبار وبوابة خريجي KSU، الأكاديمية المالية، ولوحات الشركات الرسمية
-  Ashby/Lever/Greenhouse؛ بلا Tavily أو LLM، كل 30 دقيقة.
+  Ashby/Lever/Greenhouse مع صحة مستقلة لكل شركة؛ بلا Tavily أو LLM، كل 30 دقيقة.
 - `deep`: سبعة استعلامات في كل دورة ضمن مصفوفة دوارة تغطي 12 فئة خلال اليوم،
   مع إشارات LinkedIn وX كل 8 ساعات، باستخدام Tavily Basic حتى 20 نتيجة.
 - `revalidate`: انتهاء المواعيد وإعادة فتح الروابط يوميًا.

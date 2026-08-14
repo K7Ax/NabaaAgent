@@ -773,6 +773,7 @@ class ATSBoard:
     provider: str
     slug: str
     organization: str
+    source_id: str | None = None
 
 
 class PublicATSConnector:
@@ -858,6 +859,11 @@ class PublicATSConnector:
         technical_quote = _ats_technical_quote(title, body, normalized["department"])
         if not technical_quote:
             return None
+        if any(
+            marker in normalized["workplace_type"].casefold()
+            for marker in ("remote", "عن بعد")
+        ) and not _ats_remote_scope_allowed(location):
+            return None
         city, delivery_mode = _ats_location(location, normalized["workplace_type"])
         if delivery_mode != DeliveryMode.ONLINE and city != "الرياض":
             return None
@@ -915,10 +921,13 @@ class PublicATSConnector:
 def default_ats_boards() -> list[ATSBoard]:
     """Curated official boards with a Saudi/Riyadh presence."""
     return [
-        ATSBoard("ashby", "sarjai", "Sarj.ai"),
-        ATSBoard("ashby", "LeanTech", "Lean Technologies"),
-        ATSBoard("lever", "trendyol", "Trendyol"),
-        ATSBoard("lever", "infinitepl", "Infinite PL"),
+        ATSBoard("ashby", "sarjai", "Sarj.ai", "ats-sarjai"),
+        ATSBoard("ashby", "LeanTech", "Lean Technologies", "ats-leantech"),
+        ATSBoard("lever", "trendyol", "Trendyol", "ats-trendyol"),
+        ATSBoard("lever", "infinitepl", "Infinite PL", "ats-infinitepl"),
+        ATSBoard("greenhouse", "tamara", "Tamara", "ats-tamara"),
+        ATSBoard("greenhouse", "hala", "HALA", "ats-hala"),
+        ATSBoard("lever", "tsmg", "TSMG", "ats-tsmg"),
     ]
 
 
@@ -1165,6 +1174,31 @@ def _ats_location(location: str, workplace_type: str) -> tuple[str | None, Deliv
     if any(marker in text for marker in ("riyadh", "الرياض", "diriyah", "الدرعية")):
         return "الرياض", DeliveryMode.IN_PERSON
     return None, DeliveryMode.IN_PERSON
+
+
+def _ats_remote_scope_allowed(location: str) -> bool:
+    """Reject remote jobs that are explicitly restricted to a foreign market."""
+    folded = location.casefold().strip()
+    if not folded:
+        return True
+    return any(
+        marker in folded
+        for marker in (
+            "remote",
+            "anywhere",
+            "worldwide",
+            "global",
+            "saudi",
+            "ksa",
+            "riyadh",
+            "middle east",
+            "mena",
+            "عن بعد",
+            "السعودية",
+            "الرياض",
+            "الشرق الأوسط",
+        )
+    )
 
 
 def _iso_date(value: str) -> date | None:

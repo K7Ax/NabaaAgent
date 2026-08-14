@@ -223,11 +223,14 @@ def _fast_candidates() -> tuple[dict[str, dict], dict[str, dict[str, object]]]:
         ("misk", MiskProgramsConnector(timeout=settings.request_timeout_seconds)),
         ("ksu-main", KSUOfficialNewsConnector(timeout=settings.request_timeout_seconds)),
         ("ksu-alumni-gate", KSUAlumniJobsConnector(timeout=settings.request_timeout_seconds)),
-        (
-            "public-ats",
-            PublicATSConnector(default_ats_boards(), timeout=settings.request_timeout_seconds),
-        ),
     ]
+    connectors.extend(
+        (
+            board.source_id or "public-ats",
+            PublicATSConnector([board], timeout=settings.request_timeout_seconds),
+        )
+        for board in default_ats_boards()
+    )
     for source_id, connector in connectors:
         try:
             collected = connector.collect()
