@@ -8,6 +8,8 @@ from opportunity_sentinel.connectors import (
     FinancialAcademyHackathonConnector,
     FutureSkillsConnector,
     KSUAlumniJobsConnector,
+    KSUOfficialNewsConnector,
+    MiskProgramsConnector,
     PublicATSConnector,
     _ats_location,
     _ats_opportunity_type,
@@ -113,6 +115,42 @@ def test_financial_academy_connector_extracts_current_hackathon() -> None:
     assert len(candidates) == 1
     assert candidates[0].opportunity_type == OpportunityType.HACKATHON
     assert VerificationAgent().verify(candidates[0]).status == VerificationStatus.VERIFIED
+    client.close()
+
+
+def test_misk_connector_collects_only_open_technical_programs() -> None:
+    html = """
+    <div class="carousel-item">
+      <div class="links-bar-wrapper">إغلاق باب التقديم في 30 نوفمبر 2026</div>
+      <h2>برنامج هندسة الذكاء الاصطناعي</h2>
+      <p>برنامج تقني لتطوير نماذج الذكاء الاصطناعي لجميع التخصصات التقنية</p>
+      <div class="highlighter-box-wrapper"><span>عن بعد</span></div>
+      <a class="js-program-url" data-program-url="/ar/apply/ai">قدّم الآن</a>
+      <input class="listing-banner-program-data"
+        data-current-page-url="/ar/programs/skills/ai-engineering/" />
+    </div>
+    <div class="carousel-item">
+      <h2>برنامج مغلق في الأمن السيبراني</h2>
+      <span>عن بعد</span><a>إرسال إشعار</a>
+      <input class="listing-banner-program-data"
+        data-current-page-url="/ar/programs/skills/closed-cyber/" />
+    </div>
+    """
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, text=html))
+    )
+    connector = MiskProgramsConnector(client=client)
+
+    candidates = connector.collect(today=date(2026, 8, 15))
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.title == "برنامج هندسة الذكاء الاصطناعي"
+    assert candidate.deadline == date(2026, 11, 30)
+    assert candidate.delivery_mode == DeliveryMode.ONLINE
+    assert candidate.accepted_majors == ["جميع التخصصات التقنية"]
+    assert candidate.technical_focus is True
+    assert VerificationAgent().verify(candidate).status == VerificationStatus.VERIFIED
     client.close()
 
 
@@ -248,6 +286,43 @@ def test_ksu_alumni_connector_collects_only_open_technical_opportunities() -> No
     assert candidates[0].opportunity_type == OpportunityType.COOP
     assert "هندسة الحاسب" in candidates[0].accepted_majors
     assert VerificationAgent().verify(candidates[0]).status == VerificationStatus.VERIFIED
+    client.close()
+
+
+def test_ksu_news_connector_requires_current_open_technical_application() -> None:
+    listing = '<a href="/ar/node/2026">فرصة</a><a href="/ar/node/old">قديم</a>'
+    detail = """
+    <html><body><article>
+      <h1>هاكاثون تطبيقات الذكاء الاصطناعي</h1>
+      <p>10 أغسطس 2026</p>
+      <p>تدعو جامعة الملك سعود طلاب الجامعة لبناء حلول برمجية وتقنية.</p>
+      <p>يقام الهاكاثون في جامعة الملك سعود بالرياض يوم 20 أغسطس 2026.</p>
+      <a href="https://forms.ksu.edu.sa/ai-hackathon">سجّل الآن</a>
+    </article></body></html>
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/ar/node":
+            return httpx.Response(200, text=listing)
+        if request.url.path == "/ar/node/2026":
+            return httpx.Response(200, text=detail)
+        return httpx.Response(404)
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://news.ksu.edu.sa",
+    )
+    connector = KSUOfficialNewsConnector(client=client, max_pages=2)
+
+    candidates = connector.collect(today=date(2026, 8, 15))
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.opportunity_type == OpportunityType.HACKATHON
+    assert candidate.city == "الرياض"
+    assert candidate.start_date == date(2026, 8, 20)
+    assert candidate.technical_focus is True
+    assert VerificationAgent().verify(candidate).status == VerificationStatus.VERIFIED
     client.close()
 
 

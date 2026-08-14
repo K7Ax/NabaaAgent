@@ -113,7 +113,9 @@ class DiscoveryAgent:
         org_match = re.search(rf"organization:{horizontal}([^\r\n]+)", page.content, re.I)
         valid_types = "|".join(item.value for item in OpportunityType)
         type_match = re.search(rf"type:{horizontal}({valid_types})", page.content, re.I)
-        mode_match = re.search(rf"mode:{horizontal}(in_person|online|hybrid)", page.content, re.I)
+        mode_match = re.search(
+            rf"mode:{horizontal}(in_person|online|hybrid|unknown)", page.content, re.I
+        )
         majors_match = re.search(rf"majors:{horizontal}([^\r\n]+)", page.content, re.I)
         years_match = re.search(rf"graduation_years:{horizontal}([^\r\n]+)", page.content, re.I)
         apply_match = re.search(rf"apply:{horizontal}(https?://\S+)", page.content, re.I)
@@ -126,6 +128,9 @@ class DiscoveryAgent:
         )
         technical_evidence_match = re.search(
             rf"technical_evidence:{horizontal}([^\r\n]+)", page.content, re.I
+        )
+        publication_match = re.search(
+            rf"publication_date:{horizontal}(\d{{4}}-\d{{2}}-\d{{2}})", page.content, re.I
         )
 
         required = [org_match, type_match, mode_match, apply_match]
@@ -195,6 +200,9 @@ class DiscoveryAgent:
             application_url=apply_match.group(1),
             source_url=page.url,
             evidence=evidence,
+            publication_date=(
+                date.fromisoformat(publication_match.group(1)) if publication_match else None
+            ),
         )
 
     def _extract_with_llm(self, page: SourcePage) -> OpportunityCandidate:
@@ -206,7 +214,8 @@ class DiscoveryAgent:
             "must equal the supplied flag. Valid types: internship, coop, course, "
             "graduate_program, part_time_job, entry_level_job, bootcamp, scholarship, "
             "competition, hackathon, event, volunteering. Valid modes: "
-            "in_person, online, hybrid. Set registration_open=true only if the page explicitly "
+            "in_person, online, hybrid, unknown. Use unknown rather than guessing a location. "
+            "Set registration_open=true only if the page explicitly "
             "states registration is open/currently available, and include evidence with "
             "field_name=registration_status. Set it false if explicitly closed. If eligibility "
             "is explicitly open to everyone, encode accepted_majors as ['جميع التخصصات'] with "
@@ -240,7 +249,10 @@ class VerificationAgent:
 
         if not candidate.evidence_for("organization"):
             missing.append("organization_evidence")
-        if candidate.delivery_mode != DeliveryMode.ONLINE and not candidate.evidence_for("city"):
+        if candidate.delivery_mode in {
+            DeliveryMode.IN_PERSON,
+            DeliveryMode.HYBRID,
+        } and not candidate.evidence_for("city"):
             missing.append("city_evidence")
         if candidate.registration_open is False:
             return VerificationReport(

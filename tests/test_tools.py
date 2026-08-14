@@ -1,6 +1,8 @@
 import json
+from datetime import date
 
 import httpx
+from bs4 import BeautifulSoup
 
 import opportunity_sentinel.tools as tools_module
 from opportunity_sentinel.agents import DiscoveryAgent, VerificationAgent
@@ -11,6 +13,8 @@ from opportunity_sentinel.tools import (
     WebResearchTools,
     _is_public_address,
     _looks_official,
+    _tuwaiq_channel_page,
+    _tuwaiq_index_page,
 )
 
 
@@ -163,7 +167,7 @@ def test_tuwaiq_connector_paginates_and_preserves_official_category() -> None:
                             "isOpen": True,
                             "isRegistrationOpen": True,
                             "isRegistrationClosed": False,
-                            "isPaid": False,
+                            "isPaid": True,
                             "registrationEndDate": "2099-01-01T12:00:00+03:00",
                         }
                     ],
@@ -206,6 +210,57 @@ def test_tuwaiq_connector_paginates_and_preserves_official_category() -> None:
     assert len(pages) == 1
     assert "type: bootcamp" in pages[0].content
     assert "technical_focus: true" in pages[0].content
+
+
+def test_tuwaiq_index_fallback_requires_official_open_technical_location_evidence() -> None:
+    page = _tuwaiq_index_page(
+        {
+            "href": "https://tuwaiq.edu.sa/bootcamp/current-ai/view",
+            "title": "معسكر تطوير حلول الذكاء الاصطناعي",
+            "body": "متاح التسجيل حضوريًا في الرياض - المقر الرئيسي",
+        }
+    )
+    assert page is not None
+    assert page.official is True
+    assert "registration_status: open" in page.content
+    assert "technical_focus: true" in page.content
+    assert "mode: in_person" in page.content
+
+    assert _tuwaiq_index_page(
+        {
+            "href": "https://tuwaiq.edu.sa/bootcamp/closed/view",
+            "title": "معسكر Python",
+            "body": "انتهى التسجيل في الرياض",
+        }
+    ) is None
+
+
+def test_tuwaiq_official_channel_supports_fresh_unknown_location_without_guessing() -> None:
+    today = date.today().isoformat()
+    soup = BeautifulSoup(
+        f"""
+        <div class="tgme_widget_message" data-post="TuwaiqAcademy/999">
+          <time datetime="{today}T09:00:00+03:00"></time>
+          <div class="tgme_widget_message_text">
+            طوّر جاهزيتك المهنية مع دبلوم الأمن السيبراني المتقدم.
+            سجّل الآن:
+            <a href="https://tuwaiq.edu.sa/bootcamp/current-cyber/view">الرابط</a>
+          </div>
+        </div>
+        """,
+        "html.parser",
+    )
+
+    page = _tuwaiq_channel_page(soup.select_one(".tgme_widget_message"))
+
+    assert page is not None
+    assert "mode: unknown" in page.content
+    assert "city:" not in page.content
+    candidate = DiscoveryAgent(InMemoryResearchTools([page])).extract(page.__dict__)
+    assert candidate is not None
+    assert candidate.delivery_mode.value == "unknown"
+    assert candidate.city is None
+    assert VerificationAgent().verify(candidate).status == VerificationStatus.VERIFIED
 
 
 def test_tavily_converts_positive_site_operators_to_domain_filters(monkeypatch) -> None:

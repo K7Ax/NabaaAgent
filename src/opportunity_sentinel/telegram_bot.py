@@ -615,7 +615,7 @@ def opportunity_text(candidate: OpportunityCandidate) -> str:
     return (
         f"🎯 <b>{html.escape(candidate.title)}</b>\n\n"
         f"🏢 {html.escape(candidate.organization)}\n"
-        f"📍 {html.escape(candidate.city or 'عن بُعد')}\n"
+        f"📍 {html.escape(candidate.city or 'الموقع غير محدد في الإعلان')}\n"
         f"🎓 {html.escape(majors)}\n"
         f"⏳ آخر موعد: {deadline}\n"
         f"🔗 المصدر: {html.escape(str(candidate.source_url))}\n\n"

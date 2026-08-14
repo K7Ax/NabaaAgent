@@ -42,9 +42,11 @@ flowchart TD
 
 `WebResearchTools` performs live search, checks URLs against private-network/SSRF risks,
 downloads source pages, and returns structured observations with latency and metadata.
-For Tuwaiq programs it reads the academy's expanded first-party listing API and applies deterministic
-validation to explicit structured fields, avoiding search-index staleness and unnecessary
-LLM interpretation.
+For Tuwaiq programs it reads the academy's expanded first-party listing API. When Cloudflare
+blocks server-side API traffic, it reads recent explicit registration posts from Tuwaiq's
+official public channel; indexed official pages are a final fail-closed fallback. Deterministic
+connectors also cover the Misk catalogue and current KSU news opportunities. Unknown locations
+remain `unknown` rather than being guessed as Riyadh or remote.
 For sources without a first-party connector, optional Tavily advanced search supplies
 ranked extracted content from outside sources and records credit usage/request IDs. DDGS and safe page opening
 remain the fallback, so Tavily is not a single point of failure.

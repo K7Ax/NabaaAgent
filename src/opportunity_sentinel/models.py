@@ -24,6 +24,7 @@ class DeliveryMode(StrEnum):
     IN_PERSON = "in_person"
     ONLINE = "online"
     HYBRID = "hybrid"
+    UNKNOWN = "unknown"
 
 
 class VerificationStatus(StrEnum):
@@ -82,7 +83,7 @@ class OpportunityCandidate(BaseModel):
 
     @model_validator(mode="after")
     def require_location(self) -> "OpportunityCandidate":
-        if self.delivery_mode != DeliveryMode.ONLINE and not self.city:
+        if self.delivery_mode in {DeliveryMode.IN_PERSON, DeliveryMode.HYBRID} and not self.city:
             raise ValueError("city is required for in-person and hybrid opportunities")
         return self
 

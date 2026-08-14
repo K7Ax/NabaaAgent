@@ -230,9 +230,16 @@ class WebResearchTools:
         )
 
     def _search_tuwaiq(self, query: str) -> tuple[list[SourcePage], ToolObservation]:
-        """Use Tuwaiq's public first-party API instead of unreliable search snippets."""
+        """Use Tuwaiq's API, with a zero-cost official-page index fallback.
+
+        Tuwaiq currently returns Cloudflare 403 responses to some server-side
+        clients while the same catalogue remains public in browsers.  A failed
+        API must therefore degrade to indexed *tuwaiq.edu.sa* detail pages
+        instead of making the whole academy disappear from discovery.
+        """
         started = time.perf_counter()
         pages: list[SourcePage] = []
+        strategy = "official_api"
         try:
             eligible_rows = self._tuwaiq_open_rows()
             eligible_rows.sort(
@@ -282,24 +289,88 @@ class WebResearchTools:
                     )
                 )
             success = True
-            detail_text = f"Found {len(pages)} open free programs from Tuwaiq official API"
+            detail_text = f"Found {len(pages)} open programs from Tuwaiq official API"
         except (httpx.HTTPError, ValueError, KeyError) as exc:
-            success = False
-            detail_text = f"Tuwaiq API failed: {type(exc).__name__}"
+            strategy = "official_telegram_channel"
+            try:
+                pages = self._tuwaiq_channel_fallback()
+            except (httpx.HTTPError, ValueError, KeyError):
+                pages = []
+            if not pages:
+                strategy = "official_index_fallback"
+                pages = self._tuwaiq_index_fallback(query)
+            success = bool(pages)
+            detail_text = (
+                f"Tuwaiq API failed ({type(exc).__name__}); "
+                f"{strategy} found {len(pages)} open programs"
+            )
         elapsed = (time.perf_counter() - started) * 1000
         logger.info(
             "tool_call",
-            tool="tuwaiq_official_api",
+            tool=(
+                "tuwaiq_official_api"
+                if strategy == "official_api"
+                else "tuwaiq_official_fallback"
+            ),
             success=success,
             latency_ms=elapsed,
         )
         return pages, ToolObservation(
-            tool="tuwaiq_official_api",
+            tool=(
+                "tuwaiq_official_api"
+                if strategy == "official_api"
+                else "tuwaiq_official_fallback"
+            ),
             success=success,
             detail=detail_text,
             latency_ms=elapsed,
-            metadata={"result_count": len(pages), "source": "tuwaiq.edu.sa"},
+            metadata={
+                "result_count": len(pages),
+                "source": "tuwaiq.edu.sa",
+                "strategy": strategy,
+            },
         )
+
+    def _tuwaiq_index_fallback(self, query: str) -> list[SourcePage]:
+        """Recover public official detail pages when Cloudflare blocks the API.
+
+        Search is discovery only.  Every returned record still points to an
+        official Tuwaiq detail page and must carry an explicit open marker from
+        that page's indexed text.  Closed/ambiguous snippets fail closed.
+        """
+        searches = [
+            'site:tuwaiq.edu.sa/bootcamp "متاح التسجيل" معسكر برنامج تقني',
+            'site:tuwaiq.edu.sa/bootcamp "ينتهي التسجيل" برمجة ذكاء اصطناعي',
+            'site:tuwaiq.edu.sa/bootcamp "Register Now" cybersecurity cloud data',
+        ]
+        if query.strip():
+            searches.insert(0, f"{query} /bootcamp/ متاح التسجيل")
+        unique: dict[str, SourcePage] = {}
+        for search in searches:
+            try:
+                results = DDGS(timeout=min(10, int(self.client.timeout.read))).text(
+                    search,
+                    max_results=max(20, self.max_results * 4),
+                )
+                for item in results:
+                    page = _tuwaiq_index_page(item)
+                    if page:
+                        unique[page.url] = page
+            except Exception:  # DDGS exposes heterogeneous backend failures
+                continue
+        return list(unique.values())
+
+    def _tuwaiq_channel_fallback(self) -> list[SourcePage]:
+        """Read recent registration posts from Tuwaiq's official public channel."""
+        response = self.client.get("https://t.me/s/TuwaiqAcademy")
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        pages: dict[str, SourcePage] = {}
+        for post in soup.select(".tgme_widget_message"):
+            page = _tuwaiq_channel_page(post)
+            if page:
+                pages[page.url] = page
+        return list(pages.values())
 
     def _tuwaiq_open_rows(self) -> list[dict]:
         """Paginate the official catalogue until it reaches past registrations."""
@@ -320,7 +391,6 @@ class WebResearchTools:
                     row.get("isOpen")
                     and row.get("isRegistrationOpen")
                     and not row.get("isRegistrationClosed")
-                    and not row.get("isPaid")
                     and _future_or_today(row.get("registrationEndDate"))
                 ):
                     identifier = str(row.get("id") or row.get("slug") or "")
@@ -485,6 +555,178 @@ def _tuwaiq_relevance(row: dict, query: str) -> int:
         "برمجة",
     )
     return 10 * len(terms.intersection(text.split())) + 20 * sum(x in text for x in technical)
+
+
+def _tuwaiq_index_page(item: dict) -> SourcePage | None:
+    """Convert one indexed result only when the official snippet proves it is open."""
+    url = str(item.get("href") or "").strip()
+    parsed = urlparse(url)
+    if parsed.hostname != "tuwaiq.edu.sa" or not re.fullmatch(
+        r"/bootcamp/[^/]+/view/?", parsed.path
+    ):
+        return None
+    title = str(item.get("title") or "").strip()
+    snippet = str(item.get("body") or "").strip()
+    text = f"{title}\n{snippet}"
+    folded = text.casefold()
+    if any(
+        marker in folded
+        for marker in ("للناشئين", "أبناءك", "أبنائكم", "من 14 إلى 17", "من 6 إلى 12")
+    ):
+        return None
+    if any(
+        marker in folded
+        for marker in (
+            "انتهى التسجيل",
+            "انتهي التسجيل",
+            "التسجيل مغلق",
+            "closed",
+        )
+    ):
+        return None
+    open_quote = next(
+        (
+            marker
+            for marker in (
+                "متاح التسجيل",
+                "ينتهي التسجيل",
+                "بادر بالتسجيل",
+                "سجل الآن",
+                "register now",
+            )
+            if marker in folded
+        ),
+        None,
+    )
+    technical_quote = _tuwaiq_technical_quote({"title": title, "description": snippet})
+    if not open_quote or not technical_quote:
+        return None
+
+    if "عن بعد" in text:
+        city, mode = "عن بعد", "online"
+    elif "الرياض" in text:
+        city, mode = "الرياض", "in_person"
+    else:
+        # Location is a hard delivery gate.  Never turn an omitted location into
+        # a guessed Riyadh or remote programme.
+        return None
+    opportunity_type = "bootcamp" if "معسكر" in title else "course"
+    majors = "التخصصات التقنية" if any(
+        marker in folded for marker in ("التخصصات التقنية", "تخصص تقني")
+    ) else ""
+    structured = (
+        "OPPORTUNITY_SENTINEL_STRUCTURED_SOURCE\n"
+        "organization: أكاديمية طويق\n"
+        f"type: {opportunity_type}\n"
+        f"city: {city}\n"
+        f"mode: {mode}\n"
+        f"majors: {majors}\n"
+        "registration_status: open\n"
+        f"apply: {url}\n"
+        "technical_focus: true\n"
+        f"technical_evidence: {technical_quote[:1000]}\n"
+        f"indexed_open_evidence: {open_quote}\n"
+    )
+    return SourcePage(
+        url=url,
+        title=title or "برنامج تقني من أكاديمية طويق",
+        content=structured,
+        official=True,
+    )
+
+
+def _tuwaiq_channel_page(post) -> SourcePage | None:
+    """Convert a recent official-channel registration post into structured evidence."""
+    message = post.select_one(".tgme_widget_message_text")
+    time_node = post.select_one("time[datetime]")
+    post_id = str(post.get("data-post") or "").strip()
+    if message is None or time_node is None or not post_id.startswith("TuwaiqAcademy/"):
+        return None
+    try:
+        published = datetime.fromisoformat(str(time_node["datetime"])).date()
+    except (TypeError, ValueError):
+        return None
+    age_days = (date.today() - published).days
+    if age_days < 0 or age_days > 21:
+        return None
+
+    text = "\n".join(
+        line.strip() for line in message.get_text("\n").splitlines() if line.strip()
+    )
+    folded = text.casefold()
+    if any(
+        marker in folded
+        for marker in ("للناشئين", "أبناءك", "أبنائكم", "من 14 إلى 17", "من 6 إلى 12")
+    ):
+        return None
+    open_quote = next(
+        (marker for marker in ("سجّل الآن", "سجل الآن", "التسجيل مفتوح") if marker in text),
+        None,
+    )
+    if not open_quote or any(marker in folded for marker in ("انتهى التسجيل", "التسجيل مغلق")):
+        return None
+    application_url = next(
+        (
+            str(anchor.get("href"))
+            for anchor in message.select("a[href]")
+            if re.fullmatch(
+                r"https?://(?:www\.)?tuwaiq\.edu\.sa/bootcamp/[^/]+/view/?",
+                str(anchor.get("href") or ""),
+                re.I,
+            )
+        ),
+        None,
+    )
+    if not application_url:
+        return None
+    technical_quote = _tuwaiq_technical_quote({"title": text, "description": text})
+    if not technical_quote:
+        return None
+
+    title_match = re.search(
+        r"((?:معسكر|برنامج|دبلوم|ورشة|تحدي|مسابقة)\s+[^\n.!؟]{3,180})",
+        text,
+    )
+    raw_title = title_match.group(1) if title_match else text.splitlines()[0]
+    title = re.sub(r"\s+", " ", raw_title).strip(" :،؛\"'")
+    if "عن بعد" in text:
+        city, mode = "", "online"
+    elif "الرياض" in text:
+        city, mode = "الرياض", "in_person"
+    else:
+        city, mode = "", "unknown"
+    if any(marker in title for marker in ("تحدي", "مسابقة")):
+        opportunity_type = "competition"
+    elif "ورشة" in title:
+        opportunity_type = "event"
+    elif any(marker in title for marker in ("معسكر", "دبلوم")):
+        opportunity_type = "bootcamp"
+    else:
+        opportunity_type = "course"
+    majors = next(
+        (
+            marker
+            for marker in ("جميع التخصصات التقنية", "التخصصات التقنية", "تخصص تقني")
+            if marker in text
+        ),
+        "",
+    )
+    source_url = f"https://t.me/{post_id}"
+    structured = (
+        "OPPORTUNITY_SENTINEL_STRUCTURED_SOURCE\n"
+        "organization: أكاديمية طويق\n"
+        f"type: {opportunity_type}\n"
+        + (f"city: {city}\n" if city else "")
+        + f"mode: {mode}\n"
+        + f"majors: {majors}\n"
+        + "registration_status: open\n"
+        + f"publication_date: {published.isoformat()}\n"
+        + f"apply: {application_url}\n"
+        + "technical_focus: true\n"
+        + f"technical_evidence: {technical_quote[:1000]}\n"
+        + f"channel_open_evidence: {open_quote}\n"
+    )
+    return SourcePage(url=source_url, title=title[:300], content=structured, official=True)
 
 
 def _tuwaiq_opportunity_type(detail: dict) -> str:

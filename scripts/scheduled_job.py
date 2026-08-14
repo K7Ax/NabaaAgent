@@ -25,6 +25,8 @@ from opportunity_sentinel.connectors import (
     FinancialAcademyHackathonConnector,
     FutureSkillsConnector,
     KSUAlumniJobsConnector,
+    KSUOfficialNewsConnector,
+    MiskProgramsConnector,
     PublicATSConnector,
     default_ats_boards,
     extract_linkedin_technical_training,
@@ -218,6 +220,8 @@ def _fast_candidates() -> tuple[dict[str, dict], dict[str, dict[str, object]]]:
             "financial-academy",
             FinancialAcademyHackathonConnector(timeout=settings.request_timeout_seconds),
         ),
+        ("misk", MiskProgramsConnector(timeout=settings.request_timeout_seconds)),
+        ("ksu-main", KSUOfficialNewsConnector(timeout=settings.request_timeout_seconds)),
         ("ksu-alumni-gate", KSUAlumniJobsConnector(timeout=settings.request_timeout_seconds)),
         (
             "public-ats",

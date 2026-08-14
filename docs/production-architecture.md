@@ -29,9 +29,11 @@ digest. Closing opportunities can become immediate from 60.
 
 ## Cost controls
 
-The half-hour collector calls first-party Tuwaiq, Future Skills, KSU Alumni Gate, and
-Financial Academy endpoints, plus public employer ATS APIs from Ashby, Lever, and
-Greenhouse. It uses no LLM or search provider. Deep discovery runs seven queries per cycle
+The half-hour collector calls first-party Tuwaiq, Future Skills, Misk, KSU News,
+KSU Alumni Gate, and Financial Academy sources, plus public employer ATS APIs from Ashby,
+Lever, and Greenhouse. If Tuwaiq's API is blocked, the collector uses recent registration
+posts from the academy's official public channel. It uses no paid search or LLM provider.
+Deep discovery runs seven queries per cycle
 from a rotating matrix that covers all opportunity categories during the day. Before every
 Tavily basic call, the collector asks the persistent API to reserve one credit.
 At three cycles per day this is approximately 630 credits per 30-day month, leaving a

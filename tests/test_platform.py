@@ -280,8 +280,9 @@ def test_source_registry_and_coverage_report_are_honest(tmp_path: Path) -> None:
 
     sources = {source["id"]: source for source in repository.source_health()}
     assert sources["future-skills"]["implementation_status"] == "active"
-    assert sources["misk"]["implementation_status"] == "planned"
-    assert sources["misk"]["enabled"] == 0
+    assert sources["misk"]["implementation_status"] == "active"
+    assert sources["misk"]["enabled"] == 1
+    assert sources["ksu-main"]["implementation_status"] == "active"
     assert sources["x-signals"]["operational_status"] == "signal_only"
 
     for _ in range(2):

@@ -130,7 +130,8 @@ accepted_majors, accepted_graduation_years, deadline, registration_open, applica
 technical_focus, is_free, remote_allowed, evidence.
 opportunity_type is one of internship, coop, course, graduate_program, part_time_job,
 entry_level_job, bootcamp, scholarship, competition, hackathon, event, volunteering.
-delivery_mode is in_person, online, or hybrid. deadline is YYYY-MM-DD or null.
+delivery_mode is in_person, online, hybrid, or unknown. Use unknown instead of guessing.
+deadline is YYYY-MM-DD or null.
 Set technical_focus=true only when an exact quote proves the opportunity itself involves
 software, computing, AI, data, cybersecurity, engineering technology, or building digital
 solutions; include that quote with field_name=technical_focus. Evidence is a list of

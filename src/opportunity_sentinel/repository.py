@@ -324,9 +324,14 @@ class Repository:
             [(*seed, now, now) for seed in seeds],
         )
         source_states = {
-            "tuwaiq": ("active", "Official API with catalogue fallback planned"),
+            "tuwaiq": (
+                "active",
+                "Official API with official-channel and zero-cost page-index fallbacks",
+            ),
             "future-skills": ("active", "Deterministic official catalogue connector"),
             "financial-academy": ("active", "Single official campaign connector"),
+            "misk": ("active", "Deterministic official programs catalogue connector"),
+            "ksu-main": ("active", "Official news feed opportunity connector"),
             "ksu-alumni-gate": ("active", "Official public jobs catalogue connector"),
             "public-ats": ("active", "Four curated Ashby and Lever employer boards"),
             "web-discovery": ("active", "Bounded Tavily/DDGS category discovery"),

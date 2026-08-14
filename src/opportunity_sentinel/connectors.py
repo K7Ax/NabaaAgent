@@ -173,6 +173,175 @@ class FutureSkillsConnector:
         )
 
 
+class MiskProgramsConnector:
+    """Deterministic connector for open programs in Misk Hub's official catalogue."""
+
+    base_url = "https://hub.misk.org.sa"
+    catalogue_url = f"{base_url}/ar/programs/"
+
+    def __init__(self, client: httpx.Client | None = None, *, timeout: float = 20) -> None:
+        self._owns_client = client is None
+        self.client = client or httpx.Client(
+            timeout=timeout,
+            follow_redirects=True,
+            headers={"User-Agent": "OpportunitySentinel/0.1 educational-research-bot"},
+        )
+
+    def collect(self, today: date | None = None) -> list[OpportunityCandidate]:
+        today = today or date.today()
+        response = self.client.get(self.catalogue_url)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        candidates: dict[str, OpportunityCandidate] = {}
+        for data_node in soup.select("input.listing-banner-program-data"):
+            candidate = self._candidate(data_node, today)
+            if candidate:
+                candidates[str(candidate.source_url)] = candidate
+        return list(candidates.values())
+
+    def close(self) -> None:
+        if self._owns_client:
+            self.client.close()
+
+    def _candidate(self, data_node, today: date) -> OpportunityCandidate | None:
+        card = data_node.find_parent(class_=lambda value: value and "carousel-item" in value)
+        if card is None:
+            card = data_node.parent
+        if card is None:
+            return None
+        title_node = card.find(["h2", "h3", "h4"])
+        title = _clean_text(title_node) if title_node else ""
+        card_text = _clean_text(card)
+        page_path = str(data_node.get("data-current-page-url") or "").strip()
+        page_url = urljoin(self.base_url, page_path)
+        if not title or not page_path or "/programs/" not in page_path:
+            return None
+
+        apply_node = next(
+            (
+                anchor
+                for anchor in card.select("a.js-program-url")
+                if _clean_text(anchor) in {"قدّم الآن", "انضم الآن"}
+            ),
+            None,
+        )
+        if apply_node is None:
+            return None
+        application_value = str(
+            apply_node.get("data-program-url")
+            or data_node.get("data-external-application-form-url")
+            or data_node.get("data-final-application-form-url")
+            or ""
+        ).strip()
+        if not application_value or application_value.casefold().startswith("javascript:"):
+            return None
+        application_url = urljoin(self.base_url, application_value)
+
+        deadline, deadline_quote = _misk_deadline(card_text, today)
+        if deadline and deadline < today:
+            return None
+        technical_quote = _technical_quote(title, card_text)
+        broad_major_quote = next(
+            (
+                marker
+                for marker in ("جميع التخصصات التقنية", "التخصصات التقنية", "جميع التخصصات")
+                if marker in card_text
+            ),
+            None,
+        )
+        if not technical_quote and not broad_major_quote:
+            return None
+
+        delivery_mode, city, delivery_quote = _misk_delivery(card_text)
+        if delivery_mode is None or delivery_quote is None:
+            return None
+        if delivery_mode != DeliveryMode.ONLINE and not city:
+            # An in-person opportunity without a stated city cannot be matched safely.
+            return None
+
+        opportunity_type = _misk_opportunity_type(title, card_text)
+        accepted_majors = [broad_major_quote] if broad_major_quote else []
+        open_quote = _clean_text(apply_node)
+        evidence = [
+            Evidence(
+                field_name="organization",
+                value="مؤسسة مسك",
+                quote="مؤسسة مسك",
+                source_url=page_url,
+                official_source=True,
+            ),
+            Evidence(
+                field_name="registration_status",
+                value="open",
+                quote=open_quote,
+                source_url=page_url,
+                official_source=True,
+            ),
+            Evidence(
+                field_name="delivery_mode",
+                value=delivery_mode.value,
+                quote=delivery_quote,
+                source_url=page_url,
+                official_source=True,
+            ),
+        ]
+        if technical_quote:
+            evidence.append(
+                Evidence(
+                    field_name="technical_focus",
+                    value="true",
+                    quote=technical_quote,
+                    source_url=page_url,
+                    official_source=True,
+                )
+            )
+        if broad_major_quote:
+            evidence.append(
+                Evidence(
+                    field_name="accepted_majors",
+                    value=broad_major_quote,
+                    quote=broad_major_quote,
+                    source_url=page_url,
+                    official_source=True,
+                )
+            )
+        if deadline and deadline_quote:
+            evidence.append(
+                Evidence(
+                    field_name="deadline",
+                    value=deadline.isoformat(),
+                    quote=deadline_quote,
+                    source_url=page_url,
+                    official_source=True,
+                )
+            )
+        if city:
+            evidence.append(
+                Evidence(
+                    field_name="city",
+                    value=city,
+                    quote=city,
+                    source_url=page_url,
+                    official_source=True,
+                )
+            )
+        return OpportunityCandidate(
+            title=title,
+            organization="مؤسسة مسك",
+            opportunity_type=opportunity_type,
+            city=city,
+            delivery_mode=delivery_mode,
+            accepted_majors=accepted_majors,
+            deadline=deadline,
+            registration_open=True,
+            application_url=application_url,
+            source_url=page_url,
+            evidence=evidence,
+            technical_focus=bool(technical_quote),
+            remote_allowed=delivery_mode != DeliveryMode.IN_PERSON,
+        )
+
+
 class FinancialAcademyHackathonConnector:
     """First-party connector for the Financial Academy's current innovation hackathon."""
 
@@ -418,6 +587,182 @@ class KSUAlumniJobsConnector:
             evidence=evidence,
             publication_date=publication_date,
             remote_allowed=delivery_mode != DeliveryMode.IN_PERSON,
+        )
+
+
+class KSUOfficialNewsConnector:
+    """Scan KSU's official news feed for still-applicable technical opportunities."""
+
+    base_url = "https://news.ksu.edu.sa"
+    listing_url = f"{base_url}/ar/node"
+
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        *,
+        timeout: float = 20,
+        max_pages: int = 3,
+    ) -> None:
+        self._owns_client = client is None
+        self.client = client or httpx.Client(
+            timeout=timeout,
+            follow_redirects=True,
+            headers={"User-Agent": "OpportunitySentinel/0.1 educational-research-bot"},
+        )
+        self.max_pages = max_pages
+
+    def collect(self, today: date | None = None) -> list[OpportunityCandidate]:
+        today = today or date.today()
+        urls = self._listing_urls()
+        if not urls:
+            return []
+        with ThreadPoolExecutor(max_workers=min(6, len(urls))) as executor:
+            rows = list(executor.map(lambda url: self._read_page(url, today), urls))
+        return [candidate for candidate in rows if candidate is not None]
+
+    def close(self) -> None:
+        if self._owns_client:
+            self.client.close()
+
+    def _listing_urls(self) -> list[str]:
+        urls: set[str] = set()
+        for page_number in range(self.max_pages):
+            response = self.client.get(
+                self.listing_url,
+                params={"page": page_number, "quicktabs_2": 0},
+            )
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "html.parser")
+            found = {
+                urljoin(self.base_url, str(anchor["href"]))
+                for anchor in soup.select('a[href^="/ar/node/"]')
+                if re.fullmatch(r"/ar/node/\d+", str(anchor.get("href") or ""))
+            }
+            if not found - urls:
+                break
+            urls.update(found)
+        return sorted(urls)
+
+    def _read_page(self, url: str, today: date) -> OpportunityCandidate | None:
+        response = self.client.get(url)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        article = soup.find("article")
+        if article is None:
+            return None
+        title_node = article.find("h1")
+        title = _clean_text(title_node) if title_node else ""
+        text = _clean_text(article)
+        if not title or any(
+            marker in text
+            for marker in ("انتهى التسجيل", "التسجيل مغلق", "اختتمت", "أقيمت الفعالية")
+        ):
+            return None
+        technical_quote = _technical_quote(title, text)
+        if not technical_quote:
+            return None
+        application_link = next(
+            (
+                anchor
+                for anchor in article.select("a[href]")
+                if re.fullmatch(
+                    r"(?:رابط\s+)?(?:التسجيل|التقديم|المشاركة)|"
+                    r"(?:سجل|سجّل|قدّم|شارك)\s+الآن",
+                    _clean_text(anchor),
+                )
+                and urljoin(url, str(anchor.get("href"))) != url
+            ),
+            None,
+        )
+        if application_link is None:
+            return None
+        open_quote = _clean_text(application_link)
+        application_url = urljoin(url, str(application_link["href"]))
+
+        dates = _arabic_text_dates(text)
+        publication_date = dates[0] if dates else None
+        future_dates = [value for value in dates if value >= today]
+        if not future_dates and (
+            publication_date is None or (today - publication_date).days > 30
+        ):
+            return None
+        start_date = max(future_dates) if future_dates else None
+        if "عن بعد" in text or "افتراضي" in text:
+            delivery_mode, city = DeliveryMode.ONLINE, None
+            location_quote = "عن بعد" if "عن بعد" in text else "افتراضي"
+        elif "الرياض" in text or "جامعة الملك سعود" in text:
+            delivery_mode, city = DeliveryMode.IN_PERSON, "الرياض"
+            location_quote = "جامعة الملك سعود"
+        else:
+            delivery_mode, city = DeliveryMode.UNKNOWN, None
+            location_quote = None
+        broad_major_quote = next(
+            (
+                marker
+                for marker in ("جميع التخصصات التقنية", "التخصصات التقنية", "جميع التخصصات")
+                if marker in text
+            ),
+            None,
+        )
+        accepted_majors = [broad_major_quote] if broad_major_quote else []
+        evidence = [
+            Evidence(
+                field_name="organization",
+                value="جامعة الملك سعود",
+                quote="جامعة الملك سعود",
+                source_url=url,
+                official_source=True,
+            ),
+            Evidence(
+                field_name="registration_status",
+                value="open",
+                quote=open_quote,
+                source_url=url,
+                official_source=True,
+            ),
+            Evidence(
+                field_name="technical_focus",
+                value="true",
+                quote=technical_quote,
+                source_url=url,
+                official_source=True,
+            ),
+        ]
+        if city and location_quote:
+            evidence.append(
+                Evidence(
+                    field_name="city",
+                    value=city,
+                    quote=location_quote,
+                    source_url=url,
+                    official_source=True,
+                )
+            )
+        if broad_major_quote:
+            evidence.append(
+                Evidence(
+                    field_name="accepted_majors",
+                    value=broad_major_quote,
+                    quote=broad_major_quote,
+                    source_url=url,
+                    official_source=True,
+                )
+            )
+        return OpportunityCandidate(
+            title=title,
+            organization="جامعة الملك سعود",
+            opportunity_type=_ksu_news_type(title, text),
+            city=city,
+            delivery_mode=delivery_mode,
+            accepted_majors=accepted_majors,
+            registration_open=True,
+            application_url=application_url,
+            source_url=url,
+            evidence=evidence,
+            publication_date=publication_date,
+            start_date=start_date,
+            technical_focus=True,
+            remote_allowed=(True if delivery_mode == DeliveryMode.ONLINE else None),
         )
 
 
@@ -983,6 +1328,130 @@ def _ksu_technical_quote(
         if ratio >= 0.75 or (technical_college and ratio >= 0.5):
             return ", ".join(technical_majors)[:1000]
     return None
+
+
+_ARABIC_MONTHS = {
+    "يناير": 1,
+    "فبراير": 2,
+    "مارس": 3,
+    "أبريل": 4,
+    "ابريل": 4,
+    "مايو": 5,
+    "يونيو": 6,
+    "يوليو": 7,
+    "أغسطس": 8,
+    "اغسطس": 8,
+    "سبتمبر": 9,
+    "أكتوبر": 10,
+    "اكتوبر": 10,
+    "نوفمبر": 11,
+    "ديسمبر": 12,
+}
+
+
+def _misk_deadline(text: str, today: date) -> tuple[date | None, str | None]:
+    match = re.search(
+        r"(?:إغلاق باب التقديم في|انتهاء التقديم)\s+(\d{1,2})\s+"
+        r"(يناير|فبراير|مارس|أبريل|ابريل|مايو|يونيو|يوليو|أغسطس|اغسطس|"
+        r"سبتمبر|أكتوبر|اكتوبر|نوفمبر|ديسمبر)(?:\s+(\d{4}))?",
+        text,
+    )
+    if not match:
+        return None, None
+    year = int(match.group(3) or today.year)
+    value = date(year, _ARABIC_MONTHS[match.group(2)], int(match.group(1)))
+    # A year-less date in January after a December crawl belongs to next year.
+    if not match.group(3) and value < today and today.month >= 10:
+        value = value.replace(year=year + 1)
+    return value, match.group(0)
+
+
+def _technical_quote(title: str, text: str) -> str | None:
+    markers = (
+        "تقني",
+        "برمج",
+        "الذكاء الاصطناعي",
+        "بيانات",
+        "الأمن السيبراني",
+        "الحوسبة",
+        "سحابي",
+        "تطوير التطبيقات",
+        "تطوير الويب",
+        "software",
+        "artificial intelligence",
+        "data",
+        "cyber",
+        "cloud",
+    )
+    for value in (title, text):
+        folded = value.casefold()
+        if any(marker in folded for marker in markers):
+            return value[:1000]
+    return None
+
+
+def _misk_delivery(text: str) -> tuple[DeliveryMode | None, str | None, str | None]:
+    if "عن بعد" in text:
+        return DeliveryMode.ONLINE, None, "عن بعد"
+    city = next(
+        (value for value in ("الرياض", "جدة", "الدمام", "الخبر") if value in text),
+        None,
+    )
+    if "التعليم المدمج" in text:
+        return DeliveryMode.HYBRID, city, "التعليم المدمج"
+    if "حضوري" in text:
+        return DeliveryMode.IN_PERSON, city, "حضوري"
+    return None, None, None
+
+
+def _misk_opportunity_type(title: str, text: str) -> OpportunityType:
+    folded = f"{title} {text}".casefold()
+    if "هاكاثون" in folded or "hackathon" in folded:
+        return OpportunityType.HACKATHON
+    if "معسكر" in folded or "bootcamp" in folded:
+        return OpportunityType.BOOTCAMP
+    if any(marker in folded for marker in ("تدريب على رأس العمل", "تدريب عملي", "internship")):
+        return OpportunityType.INTERNSHIP
+    if any(marker in folded for marker in ("مسابقة", "تحدي")):
+        return OpportunityType.COMPETITION
+    if any(marker in folded for marker in ("فعالية", "ورشة", "event")):
+        return OpportunityType.EVENT
+    return OpportunityType.COURSE
+
+
+def _arabic_text_dates(text: str) -> list[date]:
+    month_pattern = "|".join(sorted(_ARABIC_MONTHS, key=len, reverse=True))
+    found: list[date] = []
+    for match in re.finditer(rf"(\d{{1,2}})\s+({month_pattern})\s+(\d{{4}})", text):
+        try:
+            value = date(int(match.group(3)), _ARABIC_MONTHS[match.group(2)], int(match.group(1)))
+        except ValueError:
+            continue
+        if value not in found:
+            found.append(value)
+    for match in re.finditer(rf"({month_pattern})\s+(\d{{1,2}})[،,]?\s+(\d{{4}})", text):
+        try:
+            value = date(int(match.group(3)), _ARABIC_MONTHS[match.group(1)], int(match.group(2)))
+        except ValueError:
+            continue
+        if value not in found:
+            found.append(value)
+    return found
+
+
+def _ksu_news_type(title: str, text: str) -> OpportunityType:
+    folded = f"{title} {text}".casefold()
+    if "هاكاثون" in folded:
+        return OpportunityType.HACKATHON
+    if any(marker in folded for marker in ("مسابقة", "تحدي")):
+        return OpportunityType.COMPETITION
+    if any(marker in folded for marker in ("تدريب تعاوني", "coop")):
+        return OpportunityType.COOP
+    if any(marker in folded for marker in ("تدريب", "internship")):
+        return OpportunityType.INTERNSHIP
+    if any(marker in folded for marker in ("فعالية", "ورشة", "ملتقى", "معرض")):
+        return OpportunityType.EVENT
+    return OpportunityType.COURSE
 
 
 def _ksu_location(value: str) -> tuple[str | None, DeliveryMode]:
