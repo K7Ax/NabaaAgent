@@ -14,6 +14,7 @@ import os
 import re
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 
 import httpx
@@ -32,6 +33,7 @@ from opportunity_sentinel.lightweight_extractor import LightweightOpportunityExt
 from opportunity_sentinel.llm import Provider
 from opportunity_sentinel.models import OpportunityCandidate, VerificationStatus
 from opportunity_sentinel.repository import Repository
+from opportunity_sentinel.revalidation import revalidate_application
 from opportunity_sentinel.tools import SourcePage, WebResearchTools
 
 
@@ -44,10 +46,7 @@ def main() -> None:
     if args.mode in {"deliver", "revalidate"}:
         if not api_url or not secret:
             if args.mode == "revalidate":
-                repository = Repository(get_settings().data_db_path)
-                result = {"expired": repository.expire_stale(), "mode": "local"}
-                repository.connection.close()
-                print(json.dumps(result))
+                print(json.dumps(_revalidate_local(), ensure_ascii=False))
                 return
             raise RuntimeError("NABAA_API_URL and INTERNAL_API_SECRET are required for delivery")
         response = _signed_post(api_url, f"/internal/{args.mode}", b"", secret)
@@ -96,30 +95,84 @@ def main() -> None:
     print(json.dumps(response))
 
 
-def _queries(mode: str) -> list[str]:
+def _revalidate_local() -> dict[str, object]:
+    settings = get_settings()
+    repository = Repository(settings.data_db_path)
+    run_id = repository.start_crawl("revalidation")
+    checked = opened = unavailable = 0
+    expired = repository.expire_stale()
+    try:
+        due = repository.due_revalidation(limit=settings.revalidation_batch_size)
+        if due:
+            with ThreadPoolExecutor(max_workers=min(8, len(due))) as executor:
+                futures = {
+                    executor.submit(
+                        revalidate_application,
+                        candidate,
+                        settings.request_timeout_seconds,
+                    ): identifier
+                    for identifier, candidate in due
+                }
+                for future in as_completed(futures):
+                    identifier = futures[future]
+                    checked += 1
+                    try:
+                        result = future.result()
+                    except Exception as exc:
+                        repository.record_revalidation(
+                            identifier, "unavailable", f"{type(exc).__name__}: {exc}"
+                        )
+                        unavailable += 1
+                        continue
+                    repository.record_revalidation(identifier, result.state, result.reason)
+                    if result.state == "closed":
+                        expired += 1
+                    elif result.state == "open":
+                        opened += 1
+                    else:
+                        unavailable += 1
+        repository.finish_crawl(run_id, checked, opened)
+        return {
+            "mode": "local",
+            "checked": checked,
+            "open": opened,
+            "expired": expired,
+            "unavailable": unavailable,
+        }
+    except Exception as exc:
+        repository.finish_crawl(run_id, checked, opened, f"{type(exc).__name__}: {exc}")
+        raise
+    finally:
+        repository.connection.close()
+
+
+def _queries(mode: str, slot: int | None = None) -> list[str]:
     year = datetime.now(UTC).year
-    return [
-        (
-            f"تدريب تعاوني COOP هندسة برمجيات علوم حاسب تقنية معلومات الرياض {year} "
-            "التقديم مفتوح موقع الشركة الرسمي"
-        ),
-        (
-            f"internship software data AI cybersecurity Riyadh Saudi students {year} "
-            "apply official careers"
-        ),
-        (
-            f"برنامج خريجين تمهير وظيفة مبتدئة دوام جزئي تقنية الرياض {year} "
-            "التقديم مفتوح الموقع الرسمي"
-        ),
-        (
-            f"هاكاثون تحدي مسابقة تقنية طلاب الجامعات الرياض السعودية {year} "
-            "التسجيل مفتوح رابط رسمي"
-        ),
-        (
-            f"تدريب تعاوني هاكاثون معسكر برنامج تقني الرياض السعودية {year} "
-            "التسجيل مفتوح site:x.com"
-        ),
+    slot = datetime.now(UTC).hour // 8 if slot is None else slot % 3
+    query_sets = [
+        [
+            f"تدريب تعاوني COOP تخصصات تقنية الرياض {year} التقديم مفتوح موقع رسمي",
+            f"internship software data AI cybersecurity Riyadh students {year} official careers",
+            f"تدريب صيفي تقنية طلاب الجامعات الرياض السعودية {year} التقديم مفتوح",
+            f"برنامج خريجين تمهير تقنية الرياض {year} التقديم مفتوح موقع رسمي",
+            f"تدريب تعاوني تدريب صيفي تقنية الرياض {year} التسجيل مفتوح site:x.com",
+        ],
+        [
+            f"دوام جزئي part time تقنية برمجة الرياض {year} apply official careers",
+            f"وظيفة مبتدئة junior entry level software data الرياض {year} official careers",
+            f"هاكاثون تقني طلاب الجامعات الرياض السعودية {year} التسجيل مفتوح",
+            f"مسابقة تحدي تقني برمجة ذكاء اصطناعي السعودية {year} التسجيل مفتوح",
+            f"هاكاثون مسابقة فعالية تقنية الرياض {year} التسجيل مفتوح site:x.com",
+        ],
+        [
+            f"منحة تقنية طلاب الجامعات السعودية {year} التقديم مفتوح",
+            f"معسكر تقني برمجة بيانات ذكاء اصطناعي الرياض {year} التسجيل مفتوح",
+            f"فعالية مؤتمر ورشة تقنية طلاب الرياض {year} التسجيل مفتوح",
+            f"تطوع تقني برمجة بيانات طلاب الجامعات السعودية {year} رابط رسمي",
+            f"معسكر منحة تطوع برنامج تقني السعودية {year} التسجيل مفتوح site:x.com",
+        ],
     ]
+    return query_sets[slot]
 
 
 def _fast_candidates() -> tuple[dict[str, dict], dict[str, dict[str, object]]]:
@@ -208,7 +261,9 @@ def _deep_candidates(queries: list[str], quota_guard: Callable[[int], bool]) -> 
     )
     verifier = VerificationAgent()
     pages: dict[str, SourcePage] = {}
-    social_link_budget = 4
+    social_link_budget = 12
+    per_query_limit = 6
+    official_page_limit = max(12, settings.search_max_results * 3)
     for query in queries:
         found, _ = tools.search_web(query)
         added = 0
@@ -221,7 +276,11 @@ def _deep_candidates(queries: list[str], quota_guard: Callable[[int], bool]) -> 
                         linkedin_candidate.model_dump(mode="json")
                     )
                     added += 1
-            if page.official and page.url not in pages:
+            if (
+                page.official
+                and page.url not in pages
+                and len(pages) < official_page_limit
+            ):
                 pages.setdefault(page.url, page)
                 added += 1
             elif _is_social_url(page.url) and social_link_budget > 0:
@@ -231,11 +290,11 @@ def _deep_candidates(queries: list[str], quota_guard: Callable[[int], bool]) -> 
                     if opened and opened.official and opened.url not in pages:
                         pages.setdefault(opened.url, opened)
                         added += 1
-                    if added >= 2:
+                    if added >= per_query_limit:
                         break
                     if social_link_budget <= 0:
                         break
-            if added >= 2:
+            if added >= per_query_limit:
                 break
     if not pages or not (settings.groq_api_key or settings.openrouter_api_key):
         return candidates

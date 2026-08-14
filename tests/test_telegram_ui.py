@@ -15,6 +15,8 @@ from opportunity_sentinel.telegram_bot import (
     _deliver_graph_result,
     _initial_state,
     create_runtime,
+    due_collection_modes,
+    due_maintenance_modes,
     main_menu,
     major_keyboard,
     opportunity_text,
@@ -39,6 +41,29 @@ def test_collection_cycle_summary_exposes_real_search_counts() -> None:
     assert "فُحص 8" in text
     assert "وُثّق 8" in text
     assert "الجديد 2" in text
+
+
+def test_student_search_reuses_fresh_central_inventory(tmp_path: Path) -> None:
+    settings = Settings(
+        data_db_path=tmp_path / "central.sqlite",
+        checkpoint_db_path=tmp_path / "checkpoints.sqlite",
+        official_scan_interval_minutes=30,
+        notification_interval_minutes=480,
+    )
+    runtime = BotRuntime(settings, Repository(settings.data_db_path), graph=object())
+
+    assert due_collection_modes(runtime) == ("fast", "deep")
+
+    for source_id in ("official-connectors", "web-discovery"):
+        run_id = runtime.repository.start_crawl(source_id)
+        runtime.repository.finish_crawl(run_id, discovered=5, verified=5)
+
+    assert due_collection_modes(runtime) == ()
+
+    assert due_maintenance_modes(runtime) == ("revalidate",)
+    run_id = runtime.repository.start_crawl("revalidation")
+    runtime.repository.finish_crawl(run_id, discovered=5, verified=5)
+    assert due_maintenance_modes(runtime) == ()
 
 
 def test_all_student_navigation_is_button_driven() -> None:

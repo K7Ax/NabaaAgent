@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     request_timeout_seconds: float = Field(default=20, ge=3, le=60)
     notification_interval_minutes: int = Field(default=480, ge=15, le=1440)
     official_scan_interval_minutes: int = Field(default=30, ge=15, le=1440)
+    revalidation_interval_hours: int = Field(default=24, ge=1, le=168)
+    revalidation_batch_size: int = Field(default=30, ge=1, le=200)
     discovery_cycle_timeout_seconds: int = Field(default=150, ge=30, le=600)
     search_heartbeat_hours: int = Field(default=24, ge=1, le=168)
     public_base_url: str | None = None

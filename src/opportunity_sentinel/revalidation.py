@@ -32,4 +32,22 @@ def revalidate_application(
     }
     if any(marker in content for marker in closed_markers):
         return RevalidationResult("closed", "official application page is closed")
-    return RevalidationResult("open", "official application page is reachable")
+    open_markers = {
+        "registration open",
+        "applications open",
+        "apply now",
+        "apply for this job",
+        "submit application",
+        "التسجيل مفتوح",
+        "التقديم مفتوح",
+        "التقديم متاح",
+        "سجل الآن",
+        "قدّم الآن",
+        "قدم الآن",
+    }
+    if any(marker in content for marker in open_markers):
+        return RevalidationResult("open", "official application page proves applications are open")
+    return RevalidationResult(
+        "unavailable",
+        "application page is reachable but no current open-registration evidence was found",
+    )

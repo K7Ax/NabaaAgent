@@ -272,12 +272,13 @@ def build_router(runtime: BotRuntime) -> Router:
 
     @router.callback_query(F.data == "menu:find")
     async def find(callback: CallbackQuery, bot: Bot) -> None:
-        await callback.answer("بدأت دورة بحث حقيقية…")
+        await callback.answer("أراجع أحدث مخزون مركزي…")
         profile = runtime.repository.get_profile(callback.from_user.id)
         if not profile:
             await _edit(callback, "أكمل ملفك أولًا.", restart_keyboard())
             return
         cycle_result: dict[str, object] | None = None
+        due_modes = due_collection_modes(runtime)
         if runtime.collection_lock.locked():
             await _edit(
                 callback,
@@ -285,14 +286,14 @@ def build_router(runtime: BotRuntime) -> Router:
                 "وأرسل الجديد فور اكتمال الدورة.",
                 main_menu(),
             )
-        else:
+        elif due_modes:
             await _edit(
                 callback,
-                "🔎 أبحث الآن في المصادر الرسمية وLinkedIn وX عبر Tavily…\n"
-                "قد تستغرق الدورة نحو دقيقة، وسأعرض النتيجة عند اكتمالها.",
+                "🔎 المخزون يحتاج تحديثًا، لذلك بدأت دورة مركزية واحدة تخدم جميع الطلاب…\n"
+                "قد تستغرق نحو دقيقة، وسأعرض النتيجة عند اكتمالها.",
                 None,
             )
-            cycle_result = await run_collection_cycle(runtime, ("fast", "deep"))
+            cycle_result = await run_collection_cycle(runtime, due_modes)
             await notify_new_opportunities(
                 bot, runtime, cycle_result["new_ids"], exclude={callback.from_user.id}
             )
@@ -932,6 +933,7 @@ async def notify_new_opportunities(
 def collection_status_text(runtime: BotRuntime) -> str:
     fast = runtime.repository.latest_crawl("official-connectors")
     deep = runtime.repository.latest_crawl("web-discovery")
+    revalidation = runtime.repository.latest_crawl("revalidation")
     connected_source_ids = {
         "tuwaiq",
         "future-skills",
@@ -939,13 +941,19 @@ def collection_status_text(runtime: BotRuntime) -> str:
         "ksu-alumni-gate",
         "public-ats",
     }
+    all_sources = runtime.repository.source_health()
     connected_sources = [
         source
-        for source in runtime.repository.source_health()
+        for source in all_sources
         if source["id"] in connected_source_ids
     ]
     healthy_sources = sum(bool(source["last_success_at"]) for source in connected_sources)
     failing_sources = sum(int(source["consecutive_failures"] > 0) for source in connected_sources)
+    active_sources = sum(source["implementation_status"] == "active" for source in all_sources)
+    signal_sources = sum(
+        source["implementation_status"] == "signal_only" for source in all_sources
+    )
+    planned_sources = sum(source["implementation_status"] == "planned" for source in all_sources)
     verified_count = len(runtime.repository.verified_opportunity_ids())
     running = (
         "يعمل الآن 🔎"
@@ -958,8 +966,11 @@ def collection_status_text(runtime: BotRuntime) -> str:
         f"المخزون الموثق: {verified_count} فرصة\n"
         f"تغطية الموصلات الحية: {healthy_sources}/{len(connected_source_ids)}"
         f" | المتعثرة: {failing_sources}\n"
+        f"سجل المصادر: {active_sources} فعلي | {signal_sources} إشارات | "
+        f"{planned_sources} قيد البناء\n"
         f"آخر فحص رسمي: {_crawl_line(fast)}\n"
         f"آخر بحث عميق: {_crawl_line(deep)}\n"
+        f"آخر إعادة تحقق: {_crawl_line(revalidation)}\n"
         "الفحص الرسمي القادم: خلال "
         f"{runtime.settings.official_scan_interval_minutes} دقيقة كحد أقصى\n"
         f"البحث العميق: كل {runtime.settings.notification_interval_minutes // 60} ساعات\n\n"
@@ -1011,6 +1022,28 @@ def _crawl_due(run: dict[str, object] | None, interval: timedelta) -> bool:
         return True
 
 
+def due_collection_modes(runtime: BotRuntime) -> tuple[str, ...]:
+    """Return only stale central collectors; user clicks must not spend search credits."""
+    fast = runtime.repository.latest_crawl("official-connectors")
+    deep = runtime.repository.latest_crawl("web-discovery")
+    modes: list[str] = []
+    if _crawl_due(fast, timedelta(minutes=runtime.settings.official_scan_interval_minutes)):
+        modes.append("fast")
+    if _crawl_due(deep, timedelta(minutes=runtime.settings.notification_interval_minutes)):
+        modes.append("deep")
+    return tuple(modes)
+
+
+def due_maintenance_modes(runtime: BotRuntime) -> tuple[str, ...]:
+    revalidation = runtime.repository.latest_crawl("revalidation")
+    if _crawl_due(
+        revalidation,
+        timedelta(hours=runtime.settings.revalidation_interval_hours),
+    ):
+        return ("revalidate",)
+    return ()
+
+
 async def run_bot() -> None:
     settings = get_settings()
     if not settings.telegram_bot_token:
@@ -1042,20 +1075,10 @@ async def collection_loop(bot: Bot, runtime: BotRuntime) -> None:
     """Continuously collect centrally; never run one expensive search per student."""
     await asyncio.sleep(10)
     while True:
-        fast = runtime.repository.latest_crawl("official-connectors")
-        deep = runtime.repository.latest_crawl("web-discovery")
-        modes: list[str] = []
-        if _crawl_due(
-            fast, timedelta(minutes=runtime.settings.official_scan_interval_minutes)
-        ):
-            modes.append("fast")
-        if _crawl_due(
-            deep, timedelta(minutes=runtime.settings.notification_interval_minutes)
-        ):
-            modes.append("deep")
+        modes = (*due_collection_modes(runtime), *due_maintenance_modes(runtime))
         if modes:
             try:
-                result = await run_collection_cycle(runtime, tuple(modes))
+                result = await run_collection_cycle(runtime, modes)
                 await notify_new_opportunities(bot, runtime, result["new_ids"])
             except Exception as exc:
                 logger.exception("background_collection_failed", error=str(exc))

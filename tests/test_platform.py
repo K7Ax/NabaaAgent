@@ -22,6 +22,7 @@ from opportunity_sentinel.models import (
 )
 from opportunity_sentinel.repository import Repository
 from opportunity_sentinel.tools import SourcePage
+from scripts.coverage_report import build_report
 
 
 def _candidate(**changes: object) -> OpportunityCandidate:
@@ -180,6 +181,13 @@ def test_signed_ingestion_accepts_verified_and_rejects_bad_signature(
                 "X-Nabaa-Signature": empty_signature,
             },
         )
+        coverage = client.get(
+            "/internal/coverage",
+            headers={
+                "X-Nabaa-Timestamp": timestamp,
+                "X-Nabaa-Signature": empty_signature,
+            },
+        )
         no_telegram = client.post(
             "/internal/deliver",
             content=b"",
@@ -195,6 +203,8 @@ def test_signed_ingestion_accepts_verified_and_rejects_bad_signature(
     assert quota.json() == {"granted": True}
     assert sources.status_code == 200
     assert any(item["id"] == "ksu-main" for item in sources.json())
+    assert coverage.status_code == 200
+    assert coverage.json()["recall"]["status"] == "not_measured"
     assert no_telegram.status_code == 503
 
 
@@ -235,6 +245,13 @@ def test_revalidation_open_closed_and_unavailable(monkeypatch) -> None:
         official=True,
     )
     assert module.revalidate_application(candidate).state == "open"
+    FakeTools.page = SourcePage(
+        url=str(candidate.application_url),
+        title="Ambiguous",
+        content="نبذة عامة عن البرنامج",
+        official=True,
+    )
+    assert module.revalidate_application(candidate).state == "unavailable"
 
 
 def test_review_queue_source_health_and_revalidation_state(tmp_path: Path) -> None:
@@ -254,3 +271,51 @@ def test_review_queue_source_health_and_revalidation_state(tmp_path: Path) -> No
         "SELECT status FROM opportunities WHERE id=?", (identifier,)
     ).fetchone()
     assert row["status"] == "expired"
+
+
+def test_source_registry_and_coverage_report_are_honest(tmp_path: Path) -> None:
+    repository = Repository(tmp_path / "coverage.sqlite")
+    candidate = _candidate()
+    repository.save_opportunity(candidate, 1.0)
+
+    sources = {source["id"]: source for source in repository.source_health()}
+    assert sources["future-skills"]["implementation_status"] == "active"
+    assert sources["misk"]["implementation_status"] == "planned"
+    assert sources["misk"]["enabled"] == 0
+    assert sources["x-signals"]["operational_status"] == "signal_only"
+
+    for _ in range(2):
+        run_id = repository.start_crawl("future-skills")
+        repository.finish_crawl(run_id, 0, 0, "source unavailable")
+    degraded = {source["id"]: source for source in repository.source_health()}
+    assert degraded["future-skills"]["operational_status"] == "degraded"
+    recovered_run = repository.start_crawl("future-skills")
+    repository.finish_crawl(recovered_run, 1, 1)
+    recovered = {source["id"]: source for source in repository.source_health()}
+    assert recovered["future-skills"]["operational_status"] == "healthy"
+
+    without_gold = repository.coverage_snapshot()
+    assert without_gold["inventory"]["verified_by_type"]["internship"] == 1
+    assert without_gold["sources"]["by_implementation"]["planned"] >= 1
+    assert without_gold["recall"]["status"] == "not_measured"
+
+    gold_path = tmp_path / "gold.json"
+    gold_path.write_text(
+        json.dumps(
+            {
+                "as_of": date.today().isoformat(),
+                "opportunities": [
+                    {
+                        "application_url": str(candidate.application_url),
+                        "source_id": "ksu-main",
+                        "opportunity_type": "internship",
+                        "expected_open": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    measured = build_report(repository, gold_path)
+    assert measured["recall"]["status"] == "measured"
+    assert measured["recall"]["recall_percent"] == 100.0

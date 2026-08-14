@@ -183,19 +183,46 @@ async def revalidate(request: Request) -> dict[str, int]:
     raw = await request.body()
     _verify_internal_request(request, raw)
     state = _state(request)
+    run_id = state.repository.start_crawl("revalidation")
     expired = state.repository.expire_stale()
-    opened = unavailable = 0
-    for identifier, candidate in state.repository.due_revalidation(limit=100):
-        result = await asyncio.to_thread(
-            revalidate_application, candidate, state.settings.request_timeout_seconds
+    checked = opened = unavailable = 0
+    try:
+        due = state.repository.due_revalidation(limit=state.settings.revalidation_batch_size)
+
+        async def check_application(identifier: str, candidate: OpportunityCandidate):
+            try:
+                result = await asyncio.to_thread(
+                    revalidate_application,
+                    candidate,
+                    state.settings.request_timeout_seconds,
+                )
+                return identifier, result, None
+            except Exception as exc:
+                return identifier, None, f"{type(exc).__name__}: {exc}"
+
+        results = await asyncio.gather(
+            *(check_application(identifier, candidate) for identifier, candidate in due),
         )
-        state.repository.record_revalidation(identifier, result.state, result.reason)
-        if result.state == "closed":
-            expired += 1
-        elif result.state == "open":
-            opened += 1
-        else:
-            unavailable += 1
+        for identifier, result, error in results:
+            checked += 1
+            if error:
+                state.repository.record_revalidation(identifier, "unavailable", error)
+                unavailable += 1
+                continue
+            assert result is not None
+            state.repository.record_revalidation(identifier, result.state, result.reason)
+            if result.state == "closed":
+                expired += 1
+            elif result.state == "open":
+                opened += 1
+            else:
+                unavailable += 1
+        state.repository.finish_crawl(run_id, checked, opened)
+    except Exception as exc:
+        state.repository.finish_crawl(
+            run_id, checked, opened, f"{type(exc).__name__}: {exc}"
+        )
+        raise
     return {"open": opened, "expired": expired, "unavailable": unavailable}
 
 
@@ -319,6 +346,12 @@ async def metrics(request: Request) -> dict[str, int]:
 async def sources(request: Request) -> list[dict[str, object]]:
     _verify_internal_request(request, b"")
     return _state(request).repository.source_health()
+
+
+@app.get("/internal/coverage")
+async def coverage(request: Request) -> dict[str, object]:
+    _verify_internal_request(request, b"")
+    return _state(request).repository.coverage_snapshot()
 
 
 def _verify_internal_request(request: Request, body: bytes) -> None:

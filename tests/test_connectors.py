@@ -16,6 +16,7 @@ from opportunity_sentinel.connectors import (
 )
 from opportunity_sentinel.models import DeliveryMode, OpportunityType, VerificationStatus
 from opportunity_sentinel.tools import SourcePage
+from scripts.scheduled_job import _queries
 
 
 def _client(*, free_proof: bool = True) -> httpx.Client:
@@ -135,6 +136,28 @@ def test_linkedin_parser_accepts_active_technical_job_and_rejects_closed() -> No
         )
         is None
     )
+
+
+def test_rotating_deep_query_matrix_covers_every_priority_category() -> None:
+    shards = [_queries("deep", slot=slot) for slot in range(3)]
+    combined = " ".join(query for shard in shards for query in shard).casefold()
+
+    assert all(len(shard) == 5 for shard in shards)
+    assert all(any("site:x.com" in query for query in shard) for shard in shards)
+    for marker in (
+        "coop",
+        "internship",
+        "تدريب صيفي",
+        "دوام جزئي",
+        "وظيفة مبتدئة",
+        "هاكاثون",
+        "مسابقة",
+        "منحة",
+        "معسكر",
+        "فعالية",
+        "تطوع",
+    ):
+        assert marker.casefold() in combined
 
 
 def test_ksu_alumni_connector_collects_only_open_technical_opportunities() -> None:

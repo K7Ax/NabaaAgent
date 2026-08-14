@@ -46,6 +46,9 @@ jobs:
       - name: Verify 5,000-student matching target
         run: python scripts/load_test.py
 
+      - name: Build honest source coverage snapshot
+        run: python scripts/coverage_report.py > artifacts/source-coverage.json
+
       - name: Upload evaluator evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -55,4 +58,5 @@ jobs:
             artifacts/pytest-results.xml
             artifacts/coverage.xml
             artifacts/capstone-evidence.json
+            artifacts/source-coverage.json
           if-no-files-found: error

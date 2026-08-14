@@ -2,8 +2,10 @@
 
 ## Runtime boundary
 
-Railway owns the durable SQLite volume, Telegram webhook, matching, lifecycle, and
-delivery queue. GitHub Actions is stateless and only performs scheduled collection.
+When the production service is configured, it owns the durable database, Telegram webhook,
+matching, lifecycle, and delivery queue. GitHub Actions is stateless and only performs
+collection. The repository workflow is currently manual-only until that durable API and its
+signed-ingestion secrets exist; local polling remains the development runtime.
 All mutations sent by Actions use `HMAC-SHA256(timestamp + "." + body)` and are rejected
 after five minutes. Telegram uses its independent webhook secret header.
 
@@ -29,8 +31,9 @@ digest. Closing opportunities can become immediate from 60.
 
 The half-hour collector calls first-party Tuwaiq, Future Skills, KSU Alumni Gate, and
 Financial Academy endpoints, plus public employer ATS APIs from Ashby, Lever, and
-Greenhouse. It uses no LLM or search provider. Deep discovery runs a seven-query category
-matrix. Before every Tavily basic call, the collector asks Railway to reserve one credit.
+Greenhouse. It uses no LLM or search provider. Deep discovery runs seven queries per cycle
+from a rotating matrix that covers all opportunity categories during the day. Before every
+Tavily basic call, the collector asks the persistent API to reserve one credit.
 At three cycles per day this is approximately 630 credits per 30-day month, leaving a
 safety reserve under the 900-credit cap. The persistent counter refuses reservations
 beyond the configured limit. LLM extraction results remain associated with source

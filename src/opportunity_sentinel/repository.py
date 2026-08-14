@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import uuid
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -200,6 +201,10 @@ class Repository:
         self._add_column("opportunities", "version", "INTEGER NOT NULL DEFAULT 1")
         self._add_column("admin_reviews", "candidate_json", "TEXT")
         self._add_column("admin_reviews", "fingerprint", "TEXT")
+        self._add_column(
+            "sources", "implementation_status", "TEXT NOT NULL DEFAULT 'planned'"
+        )
+        self._add_column("sources", "coverage_notes", "TEXT")
         self.connection.execute(
             """CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_review_fingerprint
                ON admin_reviews(fingerprint) WHERE fingerprint IS NOT NULL"""
@@ -303,6 +308,13 @@ class Repository:
                 "connector_batch",
                 "A",
             ),
+            (
+                "revalidation",
+                "إعادة التحقق من الروابط والمواعيد",
+                "https://revalidation.nabaa.local",
+                "lifecycle_job",
+                "A",
+            ),
         ]
         now = _now()
         self.connection.executemany(
@@ -310,6 +322,32 @@ class Repository:
                (id,name,base_url,adapter_type,trust_tier,created_at,updated_at)
                VALUES (?,?,?,?,?,?,?)""",
             [(*seed, now, now) for seed in seeds],
+        )
+        source_states = {
+            "tuwaiq": ("active", "Official API with catalogue fallback planned"),
+            "future-skills": ("active", "Deterministic official catalogue connector"),
+            "financial-academy": ("active", "Single official campaign connector"),
+            "ksu-alumni-gate": ("active", "Official public jobs catalogue connector"),
+            "public-ats": ("active", "Four curated Ashby and Lever employer boards"),
+            "web-discovery": ("active", "Bounded Tavily/DDGS category discovery"),
+            "linkedin-signals": ("signal_only", "Indexed public signal; not a direct API"),
+            "x-signals": ("signal_only", "Indexed public signal; not a direct API"),
+            "official-connectors": ("meta", "Aggregate health for the fast collector"),
+            "revalidation": ("meta", "Daily lifecycle and application-link checks"),
+        }
+        for source_id, (implementation_status, notes) in source_states.items():
+            self.connection.execute(
+                """UPDATE sources SET implementation_status=?,coverage_notes=?,enabled=1,
+                   updated_at=? WHERE id=?""",
+                (implementation_status, notes, now, source_id),
+            )
+        active_ids = tuple(source_states)
+        placeholders = ",".join("?" for _ in active_ids)
+        self.connection.execute(
+            f"""UPDATE sources SET implementation_status='planned',enabled=0,
+                coverage_notes=COALESCE(coverage_notes,'Connector not implemented yet'),
+                updated_at=? WHERE id NOT IN ({placeholders})""",
+            (now, *active_ids),
         )
 
     def _seed_taxonomy(self) -> None:
@@ -661,7 +699,7 @@ class Repository:
         return identifier
 
     def start_crawl(self, source_id: str | None) -> str:
-        identifier = hashlib.sha256(f"{source_id}:{_now()}".encode()).hexdigest()[:24]
+        identifier = uuid.uuid4().hex[:24]
         self.connection.execute(
             "INSERT INTO crawl_runs (id,source_id,started_at,status) VALUES (?,?,?,'running')",
             (identifier, source_id, _now()),
@@ -710,10 +748,79 @@ class Repository:
 
     def source_health(self) -> list[dict[str, Any]]:
         rows = self.connection.execute(
-            """SELECT id,name,base_url,trust_tier,enabled,last_success_at,last_error_at,
+            """SELECT id,name,base_url,adapter_type,trust_tier,enabled,
+               implementation_status,coverage_notes,last_success_at,last_error_at,
                last_error,consecutive_failures FROM sources ORDER BY trust_tier,name"""
         ).fetchall()
-        return [dict(row) for row in rows]
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            source = dict(row)
+            implementation_status = str(source["implementation_status"])
+            if implementation_status == "planned":
+                operational_status = "planned"
+            elif implementation_status == "signal_only":
+                operational_status = "signal_only"
+            elif int(source["consecutive_failures"]) >= 2:
+                operational_status = "degraded"
+            elif source["last_success_at"]:
+                operational_status = "healthy"
+            else:
+                operational_status = "untested"
+            source["operational_status"] = operational_status
+            result.append(source)
+        return result
+
+    def coverage_snapshot(self, today: date | None = None) -> dict[str, Any]:
+        """Return measurable inventory and connector coverage without claiming web recall."""
+        today = today or date.today()
+        status_rows = self.connection.execute(
+            "SELECT status,COUNT(*) AS count FROM opportunities GROUP BY status"
+        ).fetchall()
+        type_rows = self.connection.execute(
+            """SELECT json_extract(payload,'$.opportunity_type') AS opportunity_type,
+               COUNT(*) AS count FROM opportunities WHERE status='verified'
+               GROUP BY opportunity_type ORDER BY count DESC"""
+        ).fetchall()
+        stale_verified = 0
+        verified_rows = self.connection.execute(
+            "SELECT payload FROM opportunities WHERE status='verified'"
+        ).fetchall()
+        for row in verified_rows:
+            candidate = OpportunityCandidate.model_validate_json(row["payload"])
+            if (candidate.deadline and candidate.deadline < today) or (
+                candidate.deadline is None
+                and candidate.start_date is not None
+                and candidate.start_date < today
+            ):
+                stale_verified += 1
+        sources = self.source_health()
+        implementation_counts: dict[str, int] = {}
+        operational_counts: dict[str, int] = {}
+        for source in sources:
+            implementation = str(source["implementation_status"])
+            operational = str(source["operational_status"])
+            implementation_counts[implementation] = implementation_counts.get(implementation, 0) + 1
+            operational_counts[operational] = operational_counts.get(operational, 0) + 1
+        return {
+            "generated_at": _now(),
+            "inventory": {
+                "by_status": {str(row["status"]): int(row["count"]) for row in status_rows},
+                "verified_by_type": {
+                    str(row["opportunity_type"]): int(row["count"]) for row in type_rows
+                },
+                "stale_verified": stale_verified,
+            },
+            "sources": {
+                "total": len(sources),
+                "by_implementation": implementation_counts,
+                "by_operational_status": operational_counts,
+                "items": sources,
+            },
+            "recall": {
+                "status": "not_measured",
+                "reason": "An independently curated gold set is required",
+            },
+        }
 
     def latest_crawl(self, source_id: str | None = None) -> dict[str, Any] | None:
         if source_id is None:
