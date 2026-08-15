@@ -196,6 +196,44 @@ def test_signed_ingestion_accepts_verified_and_rejects_bad_signature(
                 "X-Nabaa-Signature": empty_signature,
             },
         )
+        benchmark_body = json.dumps(
+            {
+                "schema_version": 1,
+                "as_of": date.today().isoformat(),
+                "scope": "Open technical student opportunities in Riyadh.",
+                "method": "Independent reviewer opened the official catalogue and application.",
+                "reviewed_sources": [
+                    {
+                        "source_id": "web-discovery",
+                        "catalogue_url": "https://ksu.edu.sa/opportunities",
+                        "review_status": "complete",
+                    }
+                ],
+                "opportunities": [
+                    {
+                        "title": "KSU Student Program",
+                        "application_url": str(_candidate().application_url),
+                        "source_id": "web-discovery",
+                        "opportunity_type": "internship",
+                        "expected_open": True,
+                        "evidence_quote": "Applications are open",
+                        "reviewed_at": date.today().isoformat(),
+                    }
+                ],
+            },
+            separators=(",", ":"),
+        ).encode()
+        benchmark_signature = hmac.new(
+            secret.encode(), timestamp.encode() + b"." + benchmark_body, hashlib.sha256
+        ).hexdigest()
+        evaluated_coverage = client.post(
+            "/internal/coverage/evaluate",
+            content=benchmark_body,
+            headers={
+                "X-Nabaa-Timestamp": timestamp,
+                "X-Nabaa-Signature": benchmark_signature,
+            },
+        )
         no_telegram = client.post(
             "/internal/deliver",
             content=b"",
@@ -214,6 +252,9 @@ def test_signed_ingestion_accepts_verified_and_rejects_bad_signature(
     assert any(item["id"] == "ksu-main" for item in sources.json())
     assert coverage.status_code == 200
     assert coverage.json()["recall"]["status"] == "not_measured"
+    assert evaluated_coverage.status_code == 200
+    assert evaluated_coverage.json()["recall"]["recall_percent"] == 100.0
+    assert evaluated_coverage.json()["recall"]["reviewed_sources"] == ["web-discovery"]
     assert no_telegram.status_code == 503
 
 
@@ -318,13 +359,26 @@ def test_source_registry_and_coverage_report_are_honest(tmp_path: Path) -> None:
     gold_path.write_text(
         json.dumps(
             {
+                "schema_version": 1,
                 "as_of": date.today().isoformat(),
+                "scope": "Open technical student opportunities in Riyadh.",
+                "method": "Independent reviewer opened the official catalogue and application.",
+                "reviewed_sources": [
+                    {
+                        "source_id": "ksu-main",
+                        "catalogue_url": "https://ksu.edu.sa/opportunities",
+                        "review_status": "complete",
+                    }
+                ],
                 "opportunities": [
                     {
+                        "title": "KSU Student Program",
                         "application_url": str(candidate.application_url),
                         "source_id": "ksu-main",
                         "opportunity_type": "internship",
                         "expected_open": True,
+                        "evidence_quote": "Applications are open",
+                        "reviewed_at": date.today().isoformat(),
                     }
                 ],
             }

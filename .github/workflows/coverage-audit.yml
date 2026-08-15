@@ -1,0 +1,41 @@
+name: Production Coverage Audit
+
+on:
+  schedule:
+    - cron: "32 4 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NABAA_API_URL: ${{ secrets.NABAA_API_URL }}
+      INTERNAL_API_SECRET: ${{ secrets.INTERNAL_API_SECRET }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e .
+      - name: Require production coverage access
+        shell: bash
+        run: |
+          test -n "$NABAA_API_URL"
+          test -n "$INTERNAL_API_SECRET"
+      - name: Measure scoped production recall
+        run: >-
+          python scripts/coverage_report.py
+          --api-url "$NABAA_API_URL"
+          --target-recall 90
+          --max-age-days 8
+          > artifacts/production-coverage.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: production-coverage-${{ github.sha }}
+          path: artifacts/production-coverage.json
+          if-no-files-found: error

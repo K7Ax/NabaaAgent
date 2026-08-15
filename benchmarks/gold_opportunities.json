@@ -1,5 +1,73 @@
 {
-  "as_of": null,
-  "method": "Independently review official catalogues, then add every open technical opportunity.",
-  "opportunities": []
+  "schema_version": 1,
+  "as_of": "2026-08-16",
+  "scope": "Pilot audit of open technical student opportunities in Riyadh or available online from Misk and Sarj.ai.",
+  "method": "A reviewer opened each official catalogue and each opportunity page independently from Nabaa, then required a visible open-registration state or application form.",
+  "reviewed_sources": [
+    {
+      "source_id": "misk",
+      "catalogue_url": "https://hub.misk.org.sa/ar/",
+      "review_status": "complete",
+      "notes": "Official catalogue and detail pages reviewed on 2026-08-16."
+    },
+    {
+      "source_id": "ats-sarjai",
+      "catalogue_url": "https://jobs.ashbyhq.com/sarjai",
+      "review_status": "complete",
+      "notes": "Official Ashby board and application tabs reviewed on 2026-08-16."
+    },
+    {
+      "source_id": "tuwaiq",
+      "catalogue_url": "https://tuwaiq.edu.sa/bootcamps",
+      "review_status": "blocked",
+      "notes": "Catalogue API was blocked by Cloudflare; indexed listings were stale and were not accepted as a complete audit."
+    }
+  ],
+  "opportunities": [
+    {
+      "title": "برنامج مسك للإعداد المهني",
+      "application_url": "https://hub.misk.org.sa/ar/programs/skills/misk-career-essentials-program/",
+      "source_id": "misk",
+      "opportunity_type": "course",
+      "expected_open": true,
+      "evidence_quote": "بدأ التقديم 1 يناير 2026، انتهاء التقديم 30 نوفمبر 2026، انضم الآن",
+      "reviewed_at": "2026-08-16"
+    },
+    {
+      "title": "برنامج مسك للتدريب على رأس العمل",
+      "application_url": "https://hub.misk.org.sa/ar/programs/skills/misk-local-traineeship-program/",
+      "source_id": "misk",
+      "opportunity_type": "internship",
+      "expected_open": true,
+      "evidence_quote": "بدأ التقديم 11 يونيو 2026، انتهاء التقديم 30 نوفمبر 2026، قدّم الآن",
+      "reviewed_at": "2026-08-16"
+    },
+    {
+      "title": "Agent Engineering Intern",
+      "application_url": "https://jobs.ashbyhq.com/sarjai/e051cba0-e6ad-49b5-b4f7-d6c8fe3ae3ee",
+      "source_id": "ats-sarjai",
+      "opportunity_type": "internship",
+      "expected_open": true,
+      "evidence_quote": "Riyadh, Saudi Arabia; Employment Type: Intern; Apply for this Job",
+      "reviewed_at": "2026-08-16"
+    },
+    {
+      "title": "Product Intern",
+      "application_url": "https://jobs.ashbyhq.com/sarjai/e49e3915-b77d-4d23-91b9-3a06ef971938",
+      "source_id": "ats-sarjai",
+      "opportunity_type": "internship",
+      "expected_open": true,
+      "evidence_quote": "Riyadh, Saudi Arabia; Employment Type: Intern; Apply for this Job",
+      "reviewed_at": "2026-08-16"
+    },
+    {
+      "title": "Quality Assurance Intern",
+      "application_url": "https://jobs.ashbyhq.com/sarjai/935ad83e-08eb-4cc7-8848-7224d3dc532f",
+      "source_id": "ats-sarjai",
+      "opportunity_type": "internship",
+      "expected_open": true,
+      "evidence_quote": "Riyadh, Saudi Arabia; final semester or recent graduate; Apply for this Job",
+      "reviewed_at": "2026-08-16"
+    }
+  ]
 }

@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from opportunity_sentinel.agents import VerificationAgent
 from opportunity_sentinel.config import Settings, get_settings
+from opportunity_sentinel.coverage import CoverageBenchmark, evaluate_repository_coverage
 from opportunity_sentinel.logging import configure_logging, logger
 from opportunity_sentinel.models import OpportunityCandidate, VerificationStatus
 from opportunity_sentinel.repository import Repository
@@ -479,6 +480,16 @@ async def sources(request: Request) -> list[dict[str, object]]:
 async def coverage(request: Request) -> dict[str, object]:
     _verify_internal_request(request, b"")
     return _state(request).repository.coverage_snapshot()
+
+
+@app.post("/internal/coverage/evaluate")
+async def evaluate_coverage(request: Request) -> dict[str, object]:
+    raw = await request.body()
+    _verify_internal_request(request, raw)
+    benchmark = CoverageBenchmark.model_validate_json(raw)
+    return await asyncio.to_thread(
+        evaluate_repository_coverage, _state(request).repository, benchmark
+    )
 
 
 def _verify_internal_request(request: Request, body: bytes) -> None:
