@@ -157,6 +157,114 @@ def test_misk_connector_collects_only_open_technical_programs() -> None:
     client.close()
 
 
+def test_misk_connector_paginates_catalogue_and_reads_official_details() -> None:
+    career_path = "/ar/programs/skills/misk-career-essentials-program/"
+    traineeship_path = "/ar/programs/skills/misk-local-traineeship-program/"
+    media_path = "/ar/programs/skills/media-work-experience/"
+    fragments = {
+        0: f"""
+        <div class="article-content">
+          <div class="article-title-inner"><a><span>برنامج مسك للإعداد المهني</span></a></div>
+          <input class="listing-card-program-data" data-button-state="Open"
+            data-button-title="انضم الآن" data-program-url="{career_path}"
+            data-button-url="{career_path}" />
+        </div>
+        <div class="article-content">
+          <div class="article-title-inner"><a><span>برنامج مغلق</span></a></div>
+          <input class="listing-card-program-data" data-button-state="Closed"
+            data-button-title="إرسال إشعار" data-program-url="/ar/programs/skills/closed/" />
+        </div>
+        <div class="article-content">
+          <div class="article-title-inner"><a><span>تجربة صحفية</span></a></div>
+          <input class="listing-card-program-data" data-button-state="Open"
+            data-button-title="قدّم الآن" data-program-url="{media_path}"
+            data-button-url="{media_path}" />
+        </div>
+        """,
+        12: f"""
+        <div class="article-content">
+          <div class="article-title-inner"><a>
+            <span>برنامج مسك للتدريب على رأس العمل</span>
+          </a></div>
+          <input class="listing-card-program-data" data-button-state="Open"
+            data-button-title="قدّم الآن" data-program-url="{traineeship_path}"
+            data-button-url="https://apply.misk.org.sa/traineeship" />
+        </div>
+        """,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            body = request.content.decode()
+            skip = 12 if "SkipCount=12" in body else 0
+            return httpx.Response(
+                200,
+                json={
+                    "stringObjectValues": fragments[skip],
+                    "nextSkippedValue": skip + 12,
+                    "skippedloadmorebutton": skip == 12,
+                },
+            )
+        if request.url.path == career_path:
+            return httpx.Response(
+                200,
+                text="""
+                <h1>برنامج مسك للإعداد المهني</h1>
+                <p>انتهاء التقديم 30 نوفمبر 2026</p><p>آلية البرنامج عن بعد</p>
+                <p>طلاب الجامعات وحديثو التخرج؛ مسار المهارات التقنية يتضمن
+                الأمن السيبراني والحوسبة السحابية والذكاء الاصطناعي.</p>
+                """,
+            )
+        if request.url.path == traineeship_path:
+            return httpx.Response(
+                200,
+                text="""
+                <h1>برنامج مسك للتدريب على رأس العمل</h1>
+                <p>انتهاء التقديم 30 نوفمبر 2026</p><p>آلية البرنامج حضوري</p>
+                <p>الموقع المملكة العربية السعودية</p>
+                <p>مجالات التدريب تشمل التكنولوجيا</p>
+                """,
+            )
+        if request.url.path == media_path:
+            return httpx.Response(
+                200,
+                text="""
+                <header class="program-overview-v3"><h2>تجربة صحفية</h2>
+                  <p>حضوري الرياض</p></header>
+                <section class="content-detail"><p>برنامج للصحافة والإعلام</p></section>
+                <section id="LstArticles">برامج ذات صلة: الذكاء الاصطناعي</section>
+                """,
+            )
+        return httpx.Response(200, text="<html></html>")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    connector = MiskProgramsConnector(client=client, max_pages=3)
+
+    candidates = connector.collect(today=date(2026, 8, 16))
+
+    assert {candidate.title for candidate in candidates} == {
+        "برنامج مسك للإعداد المهني",
+        "برنامج مسك للتدريب على رأس العمل",
+    }
+    career = next(
+        candidate for candidate in candidates if candidate.delivery_mode == DeliveryMode.ONLINE
+    )
+    traineeship = next(
+        candidate for candidate in candidates if candidate.delivery_mode == DeliveryMode.IN_PERSON
+    )
+    assert career.deadline == date(2026, 11, 30)
+    assert career.opportunity_type == OpportunityType.COURSE
+    assert traineeship.opportunity_type == OpportunityType.INTERNSHIP
+    assert traineeship.city == "جميع مدن السعودية"
+    assert str(traineeship.application_url) == "https://apply.misk.org.sa/traineeship"
+    assert all(
+        VerificationAgent().verify(candidate, today=date(2026, 8, 16)).status
+        == VerificationStatus.VERIFIED
+        for candidate in candidates
+    )
+    client.close()
+
+
 def test_monshaat_connector_checks_category_registration_and_cost() -> None:
     listing = """
     <div class="new_card_container">
@@ -465,6 +573,45 @@ def test_public_ats_connector_normalizes_three_official_providers() -> None:
         VerificationAgent().verify(candidate).status == VerificationStatus.VERIFIED
         for candidate in candidates
     )
+    client.close()
+
+
+def test_public_ats_connector_keeps_ai_product_internship() -> None:
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                200,
+                json={
+                    "jobs": [
+                        {
+                            "title": "Product Intern",
+                            "location": "Riyadh, Saudi Arabia",
+                            "department": "Product",
+                            "descriptionPlain": (
+                                "Help shape cutting-edge AI products for customers."
+                            ),
+                            "employmentType": "Intern",
+                            "workplaceType": "On-site",
+                            "isListed": True,
+                            "jobUrl": "https://jobs.ashbyhq.com/sarjai/product-intern",
+                            "applyUrl": "https://jobs.ashbyhq.com/sarjai/product-intern/application",
+                        }
+                    ]
+                },
+            )
+        )
+    )
+    connector = PublicATSConnector(
+        [ATSBoard("ashby", "sarjai", "Sarj.ai")],
+        client=client,
+    )
+
+    candidates = connector.collect()
+
+    assert len(candidates) == 1
+    assert candidates[0].title == "Product Intern"
+    assert candidates[0].technical_focus is True
+    assert VerificationAgent().verify(candidates[0]).status == VerificationStatus.VERIFIED
     client.close()
 
 

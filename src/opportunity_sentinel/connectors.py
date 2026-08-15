@@ -341,14 +341,22 @@ class MiskProgramsConnector:
 
     base_url = "https://hub.misk.org.sa"
     catalogue_url = f"{base_url}/ar/programs/"
+    catalogue_api_url = f"{base_url}/api/RenderProgram/GetAllFilteredPrograms"
 
-    def __init__(self, client: httpx.Client | None = None, *, timeout: float = 20) -> None:
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        *,
+        timeout: float = 20,
+        max_pages: int = 20,
+    ) -> None:
         self._owns_client = client is None
         self.client = client or httpx.Client(
             timeout=timeout,
             follow_redirects=True,
             headers={"User-Agent": "OpportunitySentinel/0.1 educational-research-bot"},
         )
+        self.max_pages = max_pages
 
     def collect(self, today: date | None = None) -> list[OpportunityCandidate]:
         today = today or date.today()
@@ -360,11 +368,132 @@ class MiskProgramsConnector:
             candidate = self._candidate(data_node, today)
             if candidate:
                 candidates[str(candidate.source_url)] = candidate
+
+        # The initial HTML contains only a small featured carousel. The complete
+        # catalogue is loaded through Misk's first-party pagination endpoint.
+        listing_nodes = self._catalogue_nodes()
+        if listing_nodes:
+            with ThreadPoolExecutor(max_workers=min(6, len(listing_nodes))) as executor:
+                listed_candidates = executor.map(
+                    lambda node: self._listing_candidate(node, today), listing_nodes
+                )
+            for candidate in listed_candidates:
+                if candidate:
+                    candidates[str(candidate.source_url)] = candidate
         return list(candidates.values())
 
     def close(self) -> None:
         if self._owns_client:
             self.client.close()
+
+    def _catalogue_nodes(self) -> list[Any]:
+        nodes: list[Any] = []
+        seen_urls: set[str] = set()
+        skip_count = 0
+        for _ in range(self.max_pages):
+            try:
+                response = self.client.post(
+                    self.catalogue_api_url,
+                    data={
+                        "SkipCount": skip_count,
+                        "CurrentCulture": "ar-SA",
+                        "CategoryId": 0,
+                        "OrderBy": "",
+                        "FilterBy": "",
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+            except (httpx.HTTPError, ValueError, TypeError):
+                # Keep the featured-card fallback working if Misk changes or
+                # temporarily disables its catalogue endpoint.
+                break
+            if not isinstance(payload, dict):
+                break
+            fragment = BeautifulSoup(str(payload.get("stringObjectValues") or ""), "html.parser")
+            for node in fragment.select("input.listing-card-program-data"):
+                page_value = str(
+                    node.get("data-program-url")
+                    or node.get("data-current-page-url")
+                    or ""
+                ).strip()
+                page_url = urljoin(self.base_url, page_value)
+                if not page_value or page_url in seen_urls:
+                    continue
+                seen_urls.add(page_url)
+                nodes.append(node)
+
+            try:
+                next_skip = int(payload.get("nextSkippedValue") or 0)
+            except (TypeError, ValueError):
+                break
+            stop_value = str(payload.get("skippedloadmorebutton") or "").casefold()
+            if stop_value in {"true", "404"} or next_skip <= skip_count:
+                break
+            skip_count = next_skip
+        return nodes
+
+    def _listing_candidate(self, data_node: Any, today: date) -> OpportunityCandidate | None:
+        state = str(data_node.get("data-button-state") or "").strip().casefold()
+        open_quote = str(data_node.get("data-button-title") or "").strip()
+        if state != "open" or open_quote not in {"قدّم الآن", "انضم الآن", "سجّل الآن"}:
+            return None
+
+        card = data_node.find_parent(class_="article-content") or data_node.parent
+        if card is None:
+            return None
+        title_node = card.select_one(".article-title-inner a span") or card.find(
+            ["h2", "h3", "h4"]
+        )
+        title = _clean_text(title_node) if title_node else ""
+        page_value = str(
+            data_node.get("data-program-url")
+            or data_node.get("data-current-page-url")
+            or ""
+        ).strip()
+        if not title or not page_value or "/programs/" not in page_value:
+            return None
+        page_url = urljoin(self.base_url, page_value)
+
+        application_value = str(
+            data_node.get("data-button-url")
+            or data_node.get("data-application-link")
+            or data_node.get("data-external-application-form-url")
+            or data_node.get("data-final-application-form-url")
+            or page_url
+        ).strip()
+        if application_value.casefold().startswith("javascript:"):
+            application_value = page_url
+        application_url = urljoin(self.base_url, application_value)
+
+        try:
+            response = self.client.get(page_url)
+            response.raise_for_status()
+        except httpx.HTTPError:
+            return None
+        detail_soup = BeautifulSoup(response.text, "html.parser")
+        detail_scopes = [
+            scope
+            for scope in (
+                detail_soup.select_one("header.program-overview-v3"),
+                detail_soup.select_one("section.content-detail"),
+            )
+            if scope is not None
+        ]
+        # Related programmes appear beneath the detail section and must not be
+        # allowed to make an unrelated programme look technical.
+        detail_text = " ".join(_clean_text(scope) for scope in detail_scopes)
+        if not detail_text:
+            detail_text = _page_text(response.text)
+        combined_text = f"{_clean_text(card)} {detail_text}"
+        return self._build_candidate(
+            title=title,
+            page_url=page_url,
+            application_url=application_url,
+            source_text=combined_text,
+            open_quote=open_quote,
+            today=today,
+        )
 
     def _candidate(self, data_node, today: date) -> OpportunityCandidate | None:
         card = data_node.find_parent(class_=lambda value: value and "carousel-item" in value)
@@ -400,31 +529,49 @@ class MiskProgramsConnector:
             return None
         application_url = urljoin(self.base_url, application_value)
 
-        deadline, deadline_quote = _misk_deadline(card_text, today)
+        return self._build_candidate(
+            title=title,
+            page_url=page_url,
+            application_url=application_url,
+            source_text=card_text,
+            open_quote=_clean_text(apply_node),
+            today=today,
+        )
+
+    def _build_candidate(
+        self,
+        *,
+        title: str,
+        page_url: str,
+        application_url: str,
+        source_text: str,
+        open_quote: str,
+        today: date,
+    ) -> OpportunityCandidate | None:
+        deadline, deadline_quote = _misk_deadline(source_text, today)
         if deadline and deadline < today:
             return None
-        technical_quote = _technical_quote(title, card_text)
+        technical_quote = _misk_technical_quote(title, source_text)
         broad_major_quote = next(
             (
                 marker
                 for marker in ("جميع التخصصات التقنية", "التخصصات التقنية", "جميع التخصصات")
-                if marker in card_text
+                if marker in source_text
             ),
             None,
         )
         if not technical_quote and not broad_major_quote:
             return None
 
-        delivery_mode, city, delivery_quote = _misk_delivery(card_text)
+        delivery_mode, city, delivery_quote = _misk_delivery(source_text)
         if delivery_mode is None or delivery_quote is None:
             return None
         if delivery_mode != DeliveryMode.ONLINE and not city:
             # An in-person opportunity without a stated city cannot be matched safely.
             return None
 
-        opportunity_type = _misk_opportunity_type(title, card_text)
+        opportunity_type = _misk_opportunity_type(title, source_text)
         accepted_majors = [broad_major_quote] if broad_major_quote else []
-        open_quote = _clean_text(apply_node)
         evidence = [
             Evidence(
                 field_name="organization",
@@ -479,11 +626,12 @@ class MiskProgramsConnector:
                 )
             )
         if city:
+            city_quote = "المملكة العربية السعودية" if city == "جميع مدن السعودية" else city
             evidence.append(
                 Evidence(
                     field_name="city",
                     value=city,
-                    quote=city,
+                    quote=city_quote,
                     source_url=page_url,
                     official_source=True,
                 )
@@ -1372,6 +1520,8 @@ def _ats_technical_quote(title: str, description: str, department: str) -> str |
         return None
     folded_body = description.casefold()
     body_markers = (
+        "ai products",
+        "ai-powered product",
         "software testing",
         "degree in computer science",
         "computer science or related",
@@ -1653,36 +1803,101 @@ def _technical_quote(title: str, text: str) -> str | None:
     )
     for value in (title, text):
         folded = value.casefold()
-        if any(marker in folded for marker in markers):
-            return value[:1000]
+        marker = next((item for item in markers if item in folded), None)
+        if marker:
+            start = max(0, folded.find(marker) - 200)
+            return value[start : start + 1000]
+    return None
+
+
+def _misk_technical_quote(title: str, text: str) -> str | None:
+    """Require a computing-specific phrase, not a generic use of technology or data."""
+    title_markers = (
+        "تقني",
+        "برمج",
+        "الذكاء الاصطناعي",
+        "بيانات",
+        "الأمن السيبراني",
+        "الحوسبة السحابية",
+        "software",
+        "artificial intelligence",
+        "data analyst",
+        "data science",
+        "cyber",
+        "cloud",
+    )
+    folded_title = title.casefold()
+    marker = next((item for item in title_markers if item in folded_title), None)
+    if marker:
+        start = max(0, folded_title.find(marker) - 200)
+        return title[start : start + 1000]
+
+    # A broad traineeship is technical when its own fields explicitly include
+    # technology. Prefer this direct eligibility evidence over testimonials.
+    training_fields = re.search(r"مجالات التدريب.{0,300}التكنولوجيا", text, re.DOTALL)
+    if training_fields:
+        return training_fields.group(0)[:1000]
+
+    body_markers = (
+        "المهارات التقنية",
+        "مطور برمجيات",
+        "هندسة البرمجيات",
+        "علوم البيانات",
+        "تحليل البيانات",
+        "الأمن السيبراني",
+        "الحوسبة السحابية",
+        "الذكاء الاصطناعي",
+        "software engineering",
+        "software development",
+        "data science",
+        "data analysis",
+        "cybersecurity",
+        "cloud computing",
+        "artificial intelligence",
+    )
+    folded_text = text.casefold()
+    marker = next((item for item in body_markers if item in folded_text), None)
+    if marker:
+        start = max(0, folded_text.find(marker) - 200)
+        return text[start : start + 1000]
     return None
 
 
 def _misk_delivery(text: str) -> tuple[DeliveryMode | None, str | None, str | None]:
-    if "عن بعد" in text:
-        return DeliveryMode.ONLINE, None, "عن بعد"
     city = next(
         (value for value in ("الرياض", "جدة", "الدمام", "الخبر") if value in text),
         None,
     )
+    if city is None and any(
+        marker in text for marker in ("المملكة العربية السعودية", "Saudi Arabia")
+    ):
+        city = "جميع مدن السعودية"
     if "التعليم المدمج" in text:
         return DeliveryMode.HYBRID, city, "التعليم المدمج"
     if "حضوري" in text:
         return DeliveryMode.IN_PERSON, city, "حضوري"
+    if "عن بعد" in text:
+        return DeliveryMode.ONLINE, None, "عن بعد"
+    for marker in ("عبر الإنترنت", "أونلاين", "Online", "online"):
+        if marker in text:
+            return DeliveryMode.ONLINE, None, marker
     return None, None, None
 
 
-def _misk_opportunity_type(title: str, text: str) -> OpportunityType:
-    folded = f"{title} {text}".casefold()
-    if "هاكاثون" in folded or "hackathon" in folded:
+def _misk_opportunity_type(title: str, _text: str) -> OpportunityType:
+    folded_title = title.casefold()
+    if "هاكاثون" in folded_title or "hackathon" in folded_title:
         return OpportunityType.HACKATHON
-    if "معسكر" in folded or "bootcamp" in folded:
+    if "معسكر" in folded_title or "bootcamp" in folded_title:
         return OpportunityType.BOOTCAMP
-    if any(marker in folded for marker in ("تدريب على رأس العمل", "تدريب عملي", "internship")):
+    if any(
+        marker in folded_title
+        for marker in ("تدريب على رأس العمل", "تدريب عملي", "internship", "traineeship")
+    ):
         return OpportunityType.INTERNSHIP
-    if any(marker in folded for marker in ("مسابقة", "تحدي")):
+    if any(marker in folded_title for marker in ("مسابقة", "تحدي")):
         return OpportunityType.COMPETITION
-    if any(marker in folded for marker in ("فعالية", "ورشة", "event")):
+    if any(marker in folded_title for marker in ("فعالية", "ورشة", "event")):
         return OpportunityType.EVENT
     return OpportunityType.COURSE
 
