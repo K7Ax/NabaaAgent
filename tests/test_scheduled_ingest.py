@@ -7,7 +7,7 @@ import pytest
 from scripts import scheduled_job
 
 
-def test_post_ingest_batches_bounds_requests_and_reconciles_only_at_end(monkeypatch) -> None:
+def test_post_ingest_batches_bounds_candidates_and_source_reports(monkeypatch) -> None:
     calls: list[dict] = []
 
     def fake_post(api_url: str, path: str, body: bytes, secret: str) -> dict[str, int]:
@@ -27,8 +27,14 @@ def test_post_ingest_batches_bounds_requests_and_reconciles_only_at_end(monkeypa
         f"https://example.test/{index}": {"title": f"Opportunity {index}"}
         for index in range(45)
     }
-    inventory = {"source-a": list(candidates)}
-    reports = {"source-a": {"discovered": 45, "verified": 45}}
+    inventory = {
+        f"source-{index}": list(candidates)[index * 9 : (index + 1) * 9]
+        for index in range(5)
+    }
+    reports = {
+        source_id: {"discovered": len(urls), "verified": len(urls)}
+        for source_id, urls in inventory.items()
+    }
 
     result = scheduled_job._post_ingest_batches(
         "https://example.test",
@@ -39,11 +45,13 @@ def test_post_ingest_batches_bounds_requests_and_reconciles_only_at_end(monkeypa
         inventory,
     )
 
-    assert [len(call["candidates"]) for call in calls] == [20, 20, 5]
-    assert calls[0]["source_reports"] == {}
-    assert calls[1]["source_reports"] == {}
-    assert calls[2]["source_reports"] == reports
-    assert calls[2]["source_inventory"] == inventory
+    candidate_calls = [call for call in calls if call["candidates"]]
+    report_calls = [call for call in calls if call["source_reports"]]
+    assert [len(call["candidates"]) for call in candidate_calls] == [5] * 9
+    assert all(call["source_reports"] == {} for call in candidate_calls)
+    assert [len(call["source_reports"]) for call in report_calls] == [3, 2]
+    assert set().union(*(call["source_reports"] for call in report_calls)) == set(reports)
+    assert set().union(*(call["source_inventory"] for call in report_calls)) == set(inventory)
     assert result == {"received": 45, "verified": 45, "withheld": 0}
 
 
@@ -74,3 +82,8 @@ def test_post_ingest_batches_sends_empty_finalization(monkeypatch) -> None:
 def test_post_ingest_batches_rejects_invalid_batch_size() -> None:
     with pytest.raises(ValueError, match="positive"):
         scheduled_job._post_ingest_batches("url", "secret", {}, "source", batch_size=0)
+
+    with pytest.raises(ValueError, match="report_batch_size"):
+        scheduled_job._post_ingest_batches(
+            "url", "secret", {}, "source", report_batch_size=0
+        )

@@ -39,7 +39,8 @@ from opportunity_sentinel.repository import Repository
 from opportunity_sentinel.revalidation import revalidate_application
 from opportunity_sentinel.tools import SourcePage, WebResearchTools
 
-INGEST_BATCH_SIZE = 20
+INGEST_BATCH_SIZE = 5
+SOURCE_REPORT_BATCH_SIZE = 3
 
 
 def main() -> None:
@@ -462,41 +463,53 @@ def _post_ingest_batches(
     source_reports: dict[str, dict[str, object]] | None = None,
     source_inventory: dict[str, list[str]] | None = None,
     batch_size: int = INGEST_BATCH_SIZE,
+    report_batch_size: int = SOURCE_REPORT_BATCH_SIZE,
 ) -> dict[str, int]:
     """Ingest bounded chunks so free hosts do not time out on large collections.
 
-    Source reconciliation is deliberately sent only with the final chunk. Sending
-    a partial inventory earlier could incorrectly expire opportunities that belong
-    to a later chunk.
+    Candidate and source-health batches are separate. This keeps both verification
+    writes and authoritative reconciliation below strict free-host request limits.
     """
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
+    if report_batch_size < 1:
+        raise ValueError("report_batch_size must be positive")
 
     items = list(candidates.items())
     chunks = [items[index : index + batch_size] for index in range(0, len(items), batch_size)]
-    if not chunks:
+    if not chunks and not source_reports:
         chunks = [[]]
 
     totals = {"received": 0, "verified": 0, "withheld": 0}
-    for index, chunk in enumerate(chunks):
-        final_chunk = index == len(chunks) - 1
+    for chunk in chunks:
         chunk_candidates = dict(chunk)
         chunk_urls = set(chunk_candidates)
         chunk_inventory = {
             owner: [url for url in urls if url in chunk_urls]
             for owner, urls in (source_inventory or {}).items()
         }
-        if final_chunk:
-            chunk_inventory = source_inventory or {}
         payload = _payload(
             chunk_candidates,
             source_id,
-            source_reports if final_chunk else None,
+            None,
             chunk_inventory,
         )
         response = _signed_post(api_url, "/internal/ingest/batch", payload, secret)
         for key in totals:
             totals[key] += int(response.get(key) or 0)
+
+    report_items = list((source_reports or {}).items())
+    report_chunks = [
+        report_items[index : index + report_batch_size]
+        for index in range(0, len(report_items), report_batch_size)
+    ]
+    for report_chunk in report_chunks:
+        reports = dict(report_chunk)
+        inventory = {
+            owner: (source_inventory or {}).get(owner, []) for owner in reports
+        }
+        payload = _payload({}, source_id, reports, inventory)
+        _signed_post(api_url, "/internal/ingest/batch", payload, secret)
     return totals
 
 
