@@ -39,6 +39,8 @@ from opportunity_sentinel.repository import Repository
 from opportunity_sentinel.revalidation import revalidate_application
 from opportunity_sentinel.tools import SourcePage, WebResearchTools
 
+INGEST_BATCH_SIZE = 20
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -71,13 +73,14 @@ def main() -> None:
                 )
             )
             return
-        payload = _payload(
+        response = _post_ingest_batches(
+            api_url,
+            secret,
             candidates,
             "official-connectors",
             source_reports,
             source_inventory,
         )
-        response = _signed_post(api_url, "/internal/ingest/batch", payload, secret)
         print(json.dumps(response))
         return
 
@@ -103,8 +106,7 @@ def main() -> None:
     if not api_url or not secret:
         print(json.dumps(_save_local(candidates, "web-discovery")))
         return
-    payload = _payload(candidates, "web-discovery")
-    response = _signed_post(api_url, "/internal/ingest/batch", payload, secret)
+    response = _post_ingest_batches(api_url, secret, candidates, "web-discovery")
     print(json.dumps(response))
 
 
@@ -450,6 +452,52 @@ def _payload(
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode()
+
+
+def _post_ingest_batches(
+    api_url: str,
+    secret: str,
+    candidates: dict[str, dict],
+    source_id: str,
+    source_reports: dict[str, dict[str, object]] | None = None,
+    source_inventory: dict[str, list[str]] | None = None,
+    batch_size: int = INGEST_BATCH_SIZE,
+) -> dict[str, int]:
+    """Ingest bounded chunks so free hosts do not time out on large collections.
+
+    Source reconciliation is deliberately sent only with the final chunk. Sending
+    a partial inventory earlier could incorrectly expire opportunities that belong
+    to a later chunk.
+    """
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+
+    items = list(candidates.items())
+    chunks = [items[index : index + batch_size] for index in range(0, len(items), batch_size)]
+    if not chunks:
+        chunks = [[]]
+
+    totals = {"received": 0, "verified": 0, "withheld": 0}
+    for index, chunk in enumerate(chunks):
+        final_chunk = index == len(chunks) - 1
+        chunk_candidates = dict(chunk)
+        chunk_urls = set(chunk_candidates)
+        chunk_inventory = {
+            owner: [url for url in urls if url in chunk_urls]
+            for owner, urls in (source_inventory or {}).items()
+        }
+        if final_chunk:
+            chunk_inventory = source_inventory or {}
+        payload = _payload(
+            chunk_candidates,
+            source_id,
+            source_reports if final_chunk else None,
+            chunk_inventory,
+        )
+        response = _signed_post(api_url, "/internal/ingest/batch", payload, secret)
+        for key in totals:
+            totals[key] += int(response.get(key) or 0)
+    return totals
 
 
 def _save_local(
