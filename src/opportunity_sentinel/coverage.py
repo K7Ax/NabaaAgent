@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 from opportunity_sentinel.models import OpportunityType
 from opportunity_sentinel.repository import Repository
+
+RIYADH = timezone(timedelta(hours=3), name="Asia/Riyadh")
 
 
 class ReviewedSource(BaseModel):
@@ -38,7 +40,7 @@ class CoverageBenchmark(BaseModel):
 
     @model_validator(mode="after")
     def validate_independent_audit(self) -> CoverageBenchmark:
-        if self.as_of > date.today():
+        if self.as_of > _riyadh_today():
             raise ValueError("benchmark date cannot be in the future")
         source_ids = [item.source_id for item in self.reviewed_sources]
         if len(source_ids) != len(set(source_ids)):
@@ -98,7 +100,7 @@ def evaluate_repository_coverage(
     report["recall"] = {
         "status": "measured" if expected else "not_measured",
         "gold_as_of": benchmark.as_of.isoformat(),
-        "benchmark_age_days": (date.today() - benchmark.as_of).days,
+        "benchmark_age_days": (_riyadh_today() - benchmark.as_of).days,
         "scope": benchmark.scope,
         "reviewed_sources": complete_sources,
         "blocked_sources": blocked_sources,
@@ -109,3 +111,7 @@ def evaluate_repository_coverage(
         "by_source": by_source,
     }
     return report
+
+
+def _riyadh_today() -> date:
+    return datetime.now(RIYADH).date()
