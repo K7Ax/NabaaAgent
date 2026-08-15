@@ -934,18 +934,12 @@ def collection_status_text(runtime: BotRuntime) -> str:
     fast = runtime.repository.latest_crawl("official-connectors")
     deep = runtime.repository.latest_crawl("web-discovery")
     revalidation = runtime.repository.latest_crawl("revalidation")
-    connected_source_ids = {
-        "tuwaiq",
-        "future-skills",
-        "financial-academy",
-        "ksu-alumni-gate",
-        "public-ats",
-    }
     all_sources = runtime.repository.source_health()
     connected_sources = [
         source
         for source in all_sources
-        if source["id"] in connected_source_ids
+        if source["implementation_status"] == "active"
+        and source["id"] != "web-discovery"
     ]
     healthy_sources = sum(bool(source["last_success_at"]) for source in connected_sources)
     failing_sources = sum(int(source["consecutive_failures"] > 0) for source in connected_sources)
@@ -964,7 +958,7 @@ def collection_status_text(runtime: BotRuntime) -> str:
         f"📡 <b>حالة الباحث</b>\n\n"
         f"الحالة: {running}\n"
         f"المخزون الموثق: {verified_count} فرصة\n"
-        f"تغطية الموصلات الحية: {healthy_sources}/{len(connected_source_ids)}"
+        f"تغطية المصادر الرسمية الحية: {healthy_sources}/{len(connected_sources)}"
         f" | المتعثرة: {failing_sources}\n"
         f"سجل المصادر: {active_sources} فعلي | {signal_sources} إشارات | "
         f"{planned_sources} قيد البناء\n"

@@ -29,10 +29,11 @@ digest. Closing opportunities can become immediate from 60.
 
 ## Cost controls
 
-The half-hour collector calls first-party Tuwaiq, Future Skills, Misk, KSU News,
-KSU Alumni Gate, and Financial Academy sources, plus public employer ATS APIs from Ashby,
+The half-hour collector calls first-party Tuwaiq, Future Skills, Misk, Monsha'at Academy,
+KSU News, KSU Alumni Gate, and Financial Academy sources, plus public employer ATS APIs from Ashby,
 Lever, and Greenhouse. Each employer board has an independent source-health record; the
-curated set currently includes Sarj.ai, Lean, Trendyol, Infinite PL, Tamara, HALA, and TSMG.
+curated set currently includes Sarj.ai, Lean, Trendyol, Infinite PL, Tamara, HALA, TSMG,
+Canonical, and Careem.
 If Tuwaiq's API is blocked, the collector uses recent registration posts from the academy's
 official public channel. It uses no paid search or LLM provider.
 Deep discovery runs seven queries per cycle

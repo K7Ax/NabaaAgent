@@ -284,6 +284,9 @@ def test_source_registry_and_coverage_report_are_honest(tmp_path: Path) -> None:
     assert sources["misk"]["enabled"] == 1
     assert sources["ksu-main"]["implementation_status"] == "active"
     assert sources["ats-hala"]["implementation_status"] == "active"
+    assert sources["ats-canonical"]["implementation_status"] == "active"
+    assert sources["ats-careem"]["implementation_status"] == "active"
+    assert sources["monshaat-academy"]["implementation_status"] == "active"
     assert sources["public-ats"]["implementation_status"] == "meta"
     assert sources["x-signals"]["operational_status"] == "signal_only"
 

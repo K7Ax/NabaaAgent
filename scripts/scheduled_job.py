@@ -27,6 +27,7 @@ from opportunity_sentinel.connectors import (
     KSUAlumniJobsConnector,
     KSUOfficialNewsConnector,
     MiskProgramsConnector,
+    MonshaatAcademyConnector,
     PublicATSConnector,
     default_ats_boards,
     extract_linkedin_technical_training,
@@ -56,16 +57,26 @@ def main() -> None:
         return
 
     if args.mode == "fast":
-        candidates, source_reports = _fast_candidates()
+        candidates, source_reports, source_inventory = _fast_candidates()
         if not api_url or not secret:
             print(
                 json.dumps(
-                    _save_local(candidates, "official-connectors", source_reports),
+                    _save_local(
+                        candidates,
+                        "official-connectors",
+                        source_reports,
+                        source_inventory,
+                    ),
                     ensure_ascii=False,
                 )
             )
             return
-        payload = _payload(candidates, "official-connectors", source_reports)
+        payload = _payload(
+            candidates,
+            "official-connectors",
+            source_reports,
+            source_inventory,
+        )
         response = _signed_post(api_url, "/internal/ingest/batch", payload, secret)
         print(json.dumps(response))
         return
@@ -177,7 +188,11 @@ def _queries(mode: str, slot: int | None = None) -> list[str]:
     return query_sets[slot]
 
 
-def _fast_candidates() -> tuple[dict[str, dict], dict[str, dict[str, object]]]:
+def _fast_candidates() -> tuple[
+    dict[str, dict],
+    dict[str, dict[str, object]],
+    dict[str, list[str]],
+]:
     settings = get_settings()
     tools = WebResearchTools(
         max_results=settings.search_max_results,
@@ -188,6 +203,7 @@ def _fast_candidates() -> tuple[dict[str, dict], dict[str, dict[str, object]]]:
     verifier = VerificationAgent()
     candidates: dict[str, dict] = {}
     source_reports: dict[str, dict[str, object]] = {}
+    source_inventory: dict[str, list[str]] = {}
 
     try:
         pages, observation = tools.search_web("برامج مفتوحة site:tuwaiq.edu.sa")
@@ -198,7 +214,9 @@ def _fast_candidates() -> tuple[dict[str, dict], dict[str, dict[str, object]]]:
                 continue
             report = verifier.verify(candidate)
             if report.status == VerificationStatus.VERIFIED:
-                candidates[str(candidate.application_url)] = candidate.model_dump(mode="json")
+                application_url = str(candidate.application_url)
+                candidates[application_url] = candidate.model_dump(mode="json")
+                source_inventory.setdefault("tuwaiq", []).append(application_url)
                 verified += 1
         source_reports["tuwaiq"] = {
             "discovered": len(pages),
@@ -221,6 +239,10 @@ def _fast_candidates() -> tuple[dict[str, dict], dict[str, dict[str, object]]]:
             FinancialAcademyHackathonConnector(timeout=settings.request_timeout_seconds),
         ),
         ("misk", MiskProgramsConnector(timeout=settings.request_timeout_seconds)),
+        (
+            "monshaat-academy",
+            MonshaatAcademyConnector(timeout=settings.request_timeout_seconds),
+        ),
         ("ksu-main", KSUOfficialNewsConnector(timeout=settings.request_timeout_seconds)),
         ("ksu-alumni-gate", KSUAlumniJobsConnector(timeout=settings.request_timeout_seconds)),
     ]
@@ -238,7 +260,9 @@ def _fast_candidates() -> tuple[dict[str, dict], dict[str, dict[str, object]]]:
             for candidate in collected:
                 report = verifier.verify(candidate)
                 if report.status == VerificationStatus.VERIFIED:
-                    candidates[str(candidate.application_url)] = candidate.model_dump(mode="json")
+                    application_url = str(candidate.application_url)
+                    candidates[application_url] = candidate.model_dump(mode="json")
+                    source_inventory.setdefault(source_id, []).append(application_url)
                     verified += 1
             source_reports[source_id] = {
                 "discovered": len(collected),
@@ -252,7 +276,7 @@ def _fast_candidates() -> tuple[dict[str, dict], dict[str, dict[str, object]]]:
             }
         finally:
             connector.close()
-    return candidates, source_reports
+    return candidates, source_reports, source_inventory
 
 
 def _deep_candidates(queries: list[str], quota_guard: Callable[[int], bool]) -> dict[str, dict]:
@@ -414,12 +438,14 @@ def _payload(
     candidates: dict[str, dict],
     source_id: str,
     source_reports: dict[str, dict[str, object]] | None = None,
+    source_inventory: dict[str, list[str]] | None = None,
 ) -> bytes:
     return json.dumps(
         {
             "source_id": source_id,
             "candidates": list(candidates.values()),
             "source_reports": source_reports or {},
+            "source_inventory": source_inventory or {},
         },
         ensure_ascii=False,
         separators=(",", ":"),
@@ -430,6 +456,7 @@ def _save_local(
     candidates: dict[str, dict],
     source_id: str,
     source_reports: dict[str, dict[str, object]] | None = None,
+    source_inventory: dict[str, list[str]] | None = None,
 ) -> dict[str, object]:
     settings = get_settings()
     repository = Repository(settings.data_db_path)
@@ -437,6 +464,12 @@ def _save_local(
     verifier = VerificationAgent()
     verified = withheld = 0
     titles: list[str] = []
+    source_inventory = source_inventory or {}
+    owners_by_url = {
+        application_url: owner
+        for owner, application_urls in source_inventory.items()
+        for application_url in application_urls
+    }
     try:
         for data in candidates.values():
             candidate = OpportunityCandidate.model_validate(data)
@@ -448,7 +481,8 @@ def _save_local(
             )
             report = verifier.verify(candidate)
             if report.status == VerificationStatus.VERIFIED:
-                repository.save_opportunity(candidate, report.score)
+                owner = owners_by_url.get(str(candidate.application_url))
+                repository.save_opportunity(candidate, report.score, source_id=owner or source_id)
                 verified += 1
                 titles.append(candidate.title)
             else:
@@ -462,6 +496,11 @@ def _save_local(
                 int(source_report.get("verified") or 0),
                 str(source_report["error"]) if source_report.get("error") else None,
             )
+            if not source_report.get("error"):
+                repository.reconcile_source(
+                    report_source_id,
+                    set(source_inventory.get(report_source_id, [])),
+                )
         return {
             "mode": "local",
             "received": len(candidates),

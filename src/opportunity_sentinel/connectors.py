@@ -173,6 +173,169 @@ class FutureSkillsConnector:
         )
 
 
+class MonshaatAcademyConnector:
+    """Collect open technical courses from Monsha'at Academy's official catalogue."""
+
+    base_url = "https://academy.monshaat.gov.sa"
+    catalogue_url = f"{base_url}/local/course/index.php?categoryid=0"
+    listing_url = f"{base_url}/theme/lambda/layout/includes/course_listing_ajax.php"
+    service_url = "https://www.monshaat.gov.sa/ar/node/5257"
+    technical_category_id = "10"
+
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        *,
+        timeout: float = 20,
+        max_courses: int = 30,
+    ) -> None:
+        self._owns_client = client is None
+        self.client = client or httpx.Client(
+            timeout=timeout,
+            follow_redirects=True,
+            headers={"User-Agent": "OpportunitySentinel/0.1 educational-research-bot"},
+        )
+        self.max_courses = max_courses
+
+    def collect(self, today: date | None = None) -> list[OpportunityCandidate]:
+        del today  # Ongoing courses are gated by a live "register now" control.
+        cost_quote = self._free_service_quote()
+        response = self.client.post(
+            self.listing_url,
+            data={
+                "courses_search": "",
+                "category_list[]": self.technical_category_id,
+                "location": "",
+                "crs_type": "",
+                "page": "1",
+                "courses_type": "all",
+                "sorting": "",
+                "private": "false",
+                "sign_language": "false",
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or not isinstance(payload.get("main"), str):
+            return []
+        soup = BeautifulSoup(payload["main"], "html.parser")
+        cards = soup.select("div.new_card_container")[: self.max_courses]
+        if not cards:
+            return []
+        with ThreadPoolExecutor(max_workers=min(6, len(cards))) as executor:
+            candidates = list(
+                executor.map(lambda card: self._candidate(card, cost_quote), cards)
+            )
+        return [candidate for candidate in candidates if candidate is not None]
+
+    def close(self) -> None:
+        if self._owns_client:
+            self.client.close()
+
+    def _free_service_quote(self) -> str | None:
+        try:
+            response = self.client.get(self.service_url)
+            response.raise_for_status()
+        except httpx.HTTPError:
+            return None
+        text = _page_text(response.text)
+        return next(
+            (
+                marker
+                for marker in ("خدمة مجانية", "البرامج التدريبية المجانية")
+                if marker in text
+            ),
+            None,
+        )
+
+    def _candidate(
+        self, card, cost_quote: str | None
+    ) -> OpportunityCandidate | None:
+        anchor = card.select_one(".new_card_container--title a[href]")
+        title_node = card.select_one(".new_card_container--title h2")
+        if anchor is None or title_node is None:
+            return None
+        source_url = urljoin(self.base_url, str(anchor.get("href") or ""))
+        if "/local/course/enrol.php?id=" not in source_url:
+            return None
+        title = _clean_text(title_node)
+        category_quotes = [_clean_text(node) for node in card.select(".new_card_tag")]
+        if "التقنية والابتكار" not in category_quotes:
+            return None
+        program_type_node = card.select_one(".category-tag")
+        program_type = _clean_text(program_type_node) if program_type_node else ""
+        online_markers = (
+            "برنامج إلكتروني مستمر",
+            "برنامج مباشر افتراضي",
+            "لقاء مسجل",
+        )
+        if not any(marker in program_type for marker in online_markers):
+            # Local sessions require a separately proven city; do not guess it from the academy.
+            return None
+
+        detail = self.client.get(source_url)
+        detail.raise_for_status()
+        detail_text = _page_text(detail.text)
+        if "سجل الآن" not in detail_text or any(
+            marker in detail_text
+            for marker in ("التسجيل مغلق", "انتهى التسجيل", "انتهت فترة التسجيل")
+        ):
+            return None
+        evidence = [
+            Evidence(
+                field_name="organization",
+                value="أكاديمية منشآت",
+                quote="أكاديمية منشآت",
+                source_url=source_url,
+                official_source=True,
+            ),
+            Evidence(
+                field_name="registration_status",
+                value="open",
+                quote="سجل الآن",
+                source_url=source_url,
+                official_source=True,
+            ),
+            Evidence(
+                field_name="technical_focus",
+                value="true",
+                quote="التقنية والابتكار",
+                source_url=source_url,
+                official_source=True,
+            ),
+            Evidence(
+                field_name="delivery_mode",
+                value=DeliveryMode.ONLINE.value,
+                quote=program_type,
+                source_url=source_url,
+                official_source=True,
+            ),
+        ]
+        if cost_quote:
+            evidence.append(
+                Evidence(
+                    field_name="cost",
+                    value="free",
+                    quote=cost_quote,
+                    source_url=self.service_url,
+                    official_source=True,
+                )
+            )
+        return OpportunityCandidate(
+            title=title[:300],
+            organization="أكاديمية منشآت",
+            opportunity_type=OpportunityType.COURSE,
+            delivery_mode=DeliveryMode.ONLINE,
+            technical_focus=True,
+            registration_open=True,
+            application_url=source_url,
+            source_url=source_url,
+            evidence=evidence,
+            is_free=True if cost_quote else None,
+            remote_allowed=True,
+        )
+
+
 class MiskProgramsConnector:
     """Deterministic connector for open programs in Misk Hub's official catalogue."""
 
@@ -852,8 +1015,8 @@ class PublicATSConnector:
         if not all((title, application_url, source_url)):
             return None
         opportunity_type = _ats_opportunity_type(
-            f"{title} {normalized['employment_type']} {body}"
-        )
+            f"{title} {normalized['employment_type']}"
+        ) or _ats_body_opportunity_type(body)
         if opportunity_type is None:
             return None
         technical_quote = _ats_technical_quote(title, body, normalized["department"])
@@ -928,6 +1091,8 @@ def default_ats_boards() -> list[ATSBoard]:
         ATSBoard("greenhouse", "tamara", "Tamara", "ats-tamara"),
         ATSBoard("greenhouse", "hala", "HALA", "ats-hala"),
         ATSBoard("lever", "tsmg", "TSMG", "ats-tsmg"),
+        ATSBoard("greenhouse", "canonical", "Canonical", "ats-canonical"),
+        ATSBoard("greenhouse", "careem", "Careem", "ats-careem"),
     ]
 
 
@@ -1117,6 +1282,7 @@ def _ats_opportunity_type(text: str) -> OpportunityType | None:
         for marker in (
             "graduate program",
             "graduate programme",
+            "graduate level",
             "new grad",
             "fresh graduate",
             "تمهير",
@@ -1132,25 +1298,42 @@ def _ats_opportunity_type(text: str) -> OpportunityType | None:
     return None
 
 
-def _ats_technical_quote(title: str, description: str, department: str) -> str | None:
-    text = f"{title} {department} {description}"
+def _ats_body_opportunity_type(text: str) -> OpportunityType | None:
+    """Use only unambiguous programme wording from the body.
+
+    Employer boilerplate often mentions graduates or entry-level compensation on every
+    posting. Broad words must therefore never classify an otherwise senior headline.
+    """
     folded = text.casefold()
-    technical_markers = (
+    if any(marker in folded for marker in ("co-op training", "coop training", "تدريب تعاوني")):
+        return OpportunityType.COOP
+    if any(marker in folded for marker in ("tamheer", "تمهير", "builders program")):
+        return OpportunityType.GRADUATE_PROGRAM
+    if any(
+        marker in folded
+        for marker in ("internship programme", "internship program", "summer internship")
+    ):
+        return OpportunityType.INTERNSHIP
+    return None
+
+
+def _ats_technical_quote(title: str, description: str, department: str) -> str | None:
+    headline = f"{title} {department}"
+    folded_headline = headline.casefold()
+    headline_markers = (
         "software",
         "developer",
-        "engineering intern",
-        "computer science",
-        "computer engineering",
-        "information technology",
-        "data & ai",
-        "data science",
-        "data engineering",
+        "engineer",
+        "quality assurance",
+        "system operations",
+        "data",
         "machine learning",
         "artificial intelligence",
-        "cybersecurity",
-        "cyber security",
-        "cloud engineering",
-        "product engineering",
+        "cyber",
+        "cloud",
+        "linux",
+        "ubuntu",
+        "technical",
         "هندسة البرمجيات",
         "علوم الحاسب",
         "هندسة الحاسب",
@@ -1160,16 +1343,67 @@ def _ats_technical_quote(title: str, description: str, department: str) -> str |
         "أمن سيبراني",
         "برمجة",
     )
-    marker = next((item for item in technical_markers if item in folded), None)
+    marker = next((item for item in headline_markers if item in folded_headline), None)
+    if marker:
+        start = max(0, folded_headline.find(marker) - 80)
+        return headline[start : start + 500]
+
+    nontechnical_titles = (
+        "human resources",
+        "communications",
+        "marketing",
+        "campaign",
+        "ads specialist",
+        "financial controller",
+        "accountant",
+        "procurement",
+        "customer care",
+        "legal",
+        "product manager",
+        "project manager",
+        "business services",
+        "talent scientist",
+        "موارد بشرية",
+        "تسويق",
+        "محاسب",
+        "مشتريات",
+    )
+    if any(marker in title.casefold() for marker in nontechnical_titles):
+        return None
+    folded_body = description.casefold()
+    body_markers = (
+        "software testing",
+        "degree in computer science",
+        "computer science or related",
+        "computer engineering",
+        "information technology",
+        "data science",
+        "data engineering",
+        "machine learning",
+        "artificial intelligence",
+        "cybersecurity",
+        "cyber security",
+        "programming experience",
+        "python",
+        "sql",
+        "علوم الحاسب",
+        "هندسة الحاسب",
+        "تقنية المعلومات",
+        "علم البيانات",
+        "ذكاء اصطناعي",
+        "أمن سيبراني",
+        "برمجة",
+    )
+    marker = next((item for item in body_markers if item in folded_body), None)
     if not marker:
         return None
-    start = max(0, folded.find(marker) - 80)
-    return text[start : start + 500]
+    start = max(0, folded_body.find(marker) - 80)
+    return description[start : start + 500]
 
 
 def _ats_location(location: str, workplace_type: str) -> tuple[str | None, DeliveryMode]:
     text = f"{location} {workplace_type}".casefold()
-    if any(marker in text for marker in ("remote", "عن بعد")):
+    if any(marker in text for marker in ("remote", "home based", "home-based", "عن بعد")):
         return "عن بُعد", DeliveryMode.ONLINE
     if any(marker in text for marker in ("riyadh", "الرياض", "diriyah", "الدرعية")):
         return "الرياض", DeliveryMode.IN_PERSON

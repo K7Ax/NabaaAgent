@@ -36,6 +36,7 @@ class IngestBatch(BaseModel):
     source_id: str | None = None
     candidates: list[OpportunityCandidate] = Field(max_length=200)
     source_reports: dict[str, dict[str, int | str]] = Field(default_factory=dict)
+    source_inventory: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class QuotaReservation(BaseModel):
@@ -132,6 +133,11 @@ async def ingest_batch(request: Request) -> dict[str, int]:
     state = _state(request)
     run_id = state.repository.start_crawl(batch.source_id)
     verifier = VerificationAgent()
+    owners_by_url = {
+        application_url: owner
+        for owner, application_urls in batch.source_inventory.items()
+        for application_url in application_urls
+    }
     verified = 0
     rejected = 0
     try:
@@ -144,7 +150,12 @@ async def ingest_batch(request: Request) -> dict[str, int]:
             )
             report = verifier.verify(candidate)
             if report.status == VerificationStatus.VERIFIED:
-                state.repository.save_opportunity(candidate, report.score)
+                owner = owners_by_url.get(str(candidate.application_url))
+                state.repository.save_opportunity(
+                    candidate,
+                    report.score,
+                    source_id=owner or batch.source_id,
+                )
                 verified += 1
             else:
                 rejected += 1
@@ -170,6 +181,11 @@ async def ingest_batch(request: Request) -> dict[str, int]:
                 int(report.get("verified") or 0),
                 str(report["error"]) if report.get("error") else None,
             )
+            if not report.get("error"):
+                state.repository.reconcile_source(
+                    source_id,
+                    set(batch.source_inventory.get(source_id, [])),
+                )
     except Exception as exc:
         state.repository.finish_crawl(
             run_id, len(batch.candidates), verified, f"{type(exc).__name__}: {exc}"

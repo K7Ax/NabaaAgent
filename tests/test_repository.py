@@ -31,3 +31,29 @@ def test_profile_opportunity_deduplication_and_delivery(
     assert repository.was_delivered(123, first_id) is True
     repository.save_for_student(123, first_id)
     assert repository.list_saved(123)[0][0] == first_id
+
+
+def test_authoritative_source_reconciliation_expires_removed_inventory(
+    tmp_path: Path, verified_page: SourcePage
+) -> None:
+    repository = Repository(tmp_path / "reconciliation.sqlite")
+    candidate = DiscoveryAgent(InMemoryResearchTools([verified_page])).extract(
+        verified_page.__dict__
+    )
+    assert candidate is not None
+    identifier = repository.save_opportunity(
+        candidate,
+        0.99,
+        source_id="ats-canonical",
+    )
+
+    assert repository.reconcile_source(
+        "ats-canonical", {str(candidate.application_url)}
+    ) == 0
+    assert repository.reconcile_source("ats-canonical", set()) == 1
+
+    row = repository.connection.execute(
+        "SELECT status,lifecycle FROM opportunities WHERE id=?", (identifier,)
+    ).fetchone()
+    assert row["status"] == "expired"
+    assert row["lifecycle"] == "expired"

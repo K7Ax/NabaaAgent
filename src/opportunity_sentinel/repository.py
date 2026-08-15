@@ -108,6 +108,15 @@ class Repository:
                 captured_at TEXT NOT NULL,
                 PRIMARY KEY(opportunity_id, version)
             );
+            CREATE TABLE IF NOT EXISTS opportunity_sources (
+                opportunity_id TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY(opportunity_id, source_id),
+                FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+                FOREIGN KEY(source_id) REFERENCES sources(id)
+            );
             CREATE TABLE IF NOT EXISTS evidence_records (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 opportunity_id TEXT NOT NULL,
@@ -193,6 +202,8 @@ class Repository:
               ON opportunities(status, last_verified_at);
             CREATE INDEX IF NOT EXISTS idx_queue_due ON delivery_queue(status, due_at);
             CREATE INDEX IF NOT EXISTS idx_signals_disposition ON raw_signals(disposition);
+            CREATE INDEX IF NOT EXISTS idx_opportunity_sources_active
+              ON opportunity_sources(source_id, active);
             """
         )
         self._add_column("students", "profile_json", "TEXT")
@@ -210,6 +221,7 @@ class Repository:
                ON admin_reviews(fingerprint) WHERE fingerprint IS NOT NULL"""
         )
         self._seed_sources()
+        self._backfill_source_ownership()
         self._seed_taxonomy()
         self._audit_legacy_integrity()
         self.connection.commit()
@@ -334,12 +346,32 @@ class Repository:
                 "public_json_api",
                 "A",
             ),
+            (
+                "ats-canonical",
+                "وظائف Canonical الرسمية",
+                "https://job-boards.greenhouse.io/canonicaljobs",
+                "public_json_api",
+                "A",
+            ),
+            (
+                "ats-careem",
+                "وظائف Careem الرسمية",
+                "https://job-boards.greenhouse.io/careem",
+                "public_json_api",
+                "A",
+            ),
             ("misk", "مؤسسة مسك", "https://hub.misk.org.sa", "html", "A"),
             ("futurex", "FutureX", "https://futurex.sa", "html", "A"),
             ("mcit", "وزارة الاتصالات", "https://mcit.gov.sa", "html", "A"),
             ("sdaia", "سدايا", "https://sdaia.gov.sa", "html", "A"),
             ("kacst", "كاكست", "https://kacst.gov.sa", "html", "A"),
-            ("monshaat", "منشآت", "https://monshaat.gov.sa", "html", "A"),
+            (
+                "monshaat-academy",
+                "أكاديمية منشآت",
+                "https://academy.monshaat.gov.sa",
+                "html_catalogue",
+                "A",
+            ),
             ("dga", "هيئة الحكومة الرقمية", "https://dga.gov.sa", "html", "A"),
             ("web-discovery", "البحث المركزي الدوري", "https://search.nabaa.local", "search", "C"),
             (
@@ -367,9 +399,12 @@ class Repository:
         ]
         now = _now()
         self.connection.executemany(
-            """INSERT OR IGNORE INTO sources
+            """INSERT INTO sources
                (id,name,base_url,adapter_type,trust_tier,created_at,updated_at)
-               VALUES (?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET name=excluded.name,
+               base_url=excluded.base_url,adapter_type=excluded.adapter_type,
+               trust_tier=excluded.trust_tier,updated_at=excluded.updated_at""",
             [(*seed, now, now) for seed in seeds],
         )
         source_states = {
@@ -380,6 +415,10 @@ class Repository:
             "future-skills": ("active", "Deterministic official catalogue connector"),
             "financial-academy": ("active", "Single official campaign connector"),
             "misk": ("active", "Deterministic official programs catalogue connector"),
+            "monshaat-academy": (
+                "active",
+                "Official technical-category catalogue with per-course registration checks",
+            ),
             "ksu-main": ("active", "Official news feed opportunity connector"),
             "ksu-alumni-gate": ("active", "Official public jobs catalogue connector"),
             "public-ats": ("meta", "Aggregate label for curated employer boards"),
@@ -390,6 +429,8 @@ class Repository:
             "ats-tamara": ("active", "Independent official Greenhouse board"),
             "ats-hala": ("active", "Independent official Greenhouse board"),
             "ats-tsmg": ("active", "Independent official Lever board"),
+            "ats-canonical": ("active", "Independent official Greenhouse board"),
+            "ats-careem": ("active", "Independent official Greenhouse board"),
             "web-discovery": ("active", "Bounded Tavily/DDGS category discovery"),
             "linkedin-signals": ("signal_only", "Indexed public signal; not a direct API"),
             "x-signals": ("signal_only", "Indexed public signal; not a direct API"),
@@ -409,6 +450,13 @@ class Repository:
                 coverage_notes=COALESCE(coverage_notes,'Connector not implemented yet'),
                 updated_at=? WHERE id NOT IN ({placeholders})""",
             (now, *active_ids),
+        )
+        self.connection.execute(
+            """DELETE FROM sources WHERE id='monshaat'
+               AND NOT EXISTS (SELECT 1 FROM crawl_runs WHERE source_id='monshaat')
+               AND NOT EXISTS (
+                 SELECT 1 FROM opportunity_sources WHERE source_id='monshaat'
+               )"""
         )
 
     def _seed_taxonomy(self) -> None:
@@ -442,6 +490,38 @@ class Repository:
                     """UPDATE delivery_queue SET status='cancelled'
                        WHERE opportunity_id=? AND status='pending'""",
                     (row["id"],),
+                )
+
+    def _backfill_source_ownership(self) -> None:
+        """Attach pre-migration opportunities to deterministic connector identities."""
+        organization_sources = {
+            "Sarj.ai": "ats-sarjai",
+            "Lean Technologies": "ats-leantech",
+            "Trendyol": "ats-trendyol",
+            "Infinite PL": "ats-infinitepl",
+            "Tamara": "ats-tamara",
+            "HALA": "ats-hala",
+            "TSMG": "ats-tsmg",
+            "Canonical": "ats-canonical",
+            "Careem": "ats-careem",
+            "أكاديمية منشآت": "monshaat-academy",
+            "مؤسسة مسك": "misk",
+        }
+        rows = self.connection.execute(
+            """SELECT o.id,o.payload FROM opportunities o
+               WHERE NOT EXISTS (
+                 SELECT 1 FROM opportunity_sources os WHERE os.opportunity_id=o.id
+               )"""
+        ).fetchall()
+        now = _now()
+        for row in rows:
+            candidate = OpportunityCandidate.model_validate_json(row["payload"])
+            source_id = organization_sources.get(candidate.organization)
+            if source_id:
+                self.connection.execute(
+                    """INSERT OR IGNORE INTO opportunity_sources
+                       (opportunity_id,source_id,last_seen_at,active) VALUES (?,?,?,1)""",
+                    (row["id"], source_id, now),
                 )
 
     def upsert_profile(self, profile: StudentProfile) -> None:
@@ -486,7 +566,11 @@ class Repository:
         return [profile for row in rows if (profile := self.get_profile(row["telegram_id"]))]
 
     def save_opportunity(
-        self, candidate: OpportunityCandidate, score: float, status: str = "verified"
+        self,
+        candidate: OpportunityCandidate,
+        score: float,
+        status: str = "verified",
+        source_id: str | None = None,
     ) -> str:
         canonical_url = _canonical_url(str(candidate.application_url))
         identifier = hashlib.sha256(canonical_url.encode()).hexdigest()[:16]
@@ -544,10 +628,62 @@ class Repository:
                     evidence.captured_at.isoformat(),
                 ),
             )
+        if source_id:
+            self.link_opportunity_source(identifier, source_id)
         self.connection.commit()
         if status == "verified":
             self.recompute_matches(identifier)
         return identifier
+
+    def link_opportunity_source(self, opportunity_id: str, source_id: str) -> None:
+        self.connection.execute(
+            """INSERT INTO opportunity_sources
+               (opportunity_id,source_id,last_seen_at,active) VALUES (?,?,?,1)
+               ON CONFLICT(opportunity_id,source_id) DO UPDATE SET
+               last_seen_at=excluded.last_seen_at,active=1""",
+            (opportunity_id, source_id, _now()),
+        )
+
+    def reconcile_source(self, source_id: str, current_application_urls: set[str]) -> int:
+        """Expire records removed by a successful authoritative connector crawl."""
+        canonical_urls = {_canonical_url(url) for url in current_application_urls}
+        self.connection.execute(
+            "UPDATE opportunity_sources SET active=0 WHERE source_id=?", (source_id,)
+        )
+        if canonical_urls:
+            placeholders = ",".join("?" for _ in canonical_urls)
+            self.connection.execute(
+                f"""UPDATE opportunity_sources SET active=1,last_seen_at=?
+                    WHERE source_id=? AND opportunity_id IN (
+                      SELECT id FROM opportunities WHERE application_url IN ({placeholders})
+                    )""",
+                (_now(), source_id, *canonical_urls),
+            )
+        stale_rows = self.connection.execute(
+            """SELECT os.opportunity_id FROM opportunity_sources os
+               JOIN opportunities o ON o.id=os.opportunity_id
+               WHERE os.source_id=? AND os.active=0 AND o.status='verified'
+               AND NOT EXISTS (
+                 SELECT 1 FROM opportunity_sources other
+                 WHERE other.opportunity_id=os.opportunity_id AND other.active=1
+               )""",
+            (source_id,),
+        ).fetchall()
+        stale_ids = [str(row["opportunity_id"]) for row in stale_rows]
+        if stale_ids:
+            placeholders = ",".join("?" for _ in stale_ids)
+            self.connection.execute(
+                f"""UPDATE opportunities SET status='expired',lifecycle='expired'
+                    WHERE id IN ({placeholders}) AND status='verified'""",
+                stale_ids,
+            )
+            self.connection.execute(
+                f"""UPDATE delivery_queue SET status='cancelled'
+                    WHERE opportunity_id IN ({placeholders}) AND status='pending'""",
+                stale_ids,
+            )
+        self.connection.commit()
+        return len(stale_ids)
 
     def get_opportunity(self, identifier: str) -> OpportunityCandidate | None:
         row = self.connection.execute(

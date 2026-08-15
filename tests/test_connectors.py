@@ -10,6 +10,7 @@ from opportunity_sentinel.connectors import (
     KSUAlumniJobsConnector,
     KSUOfficialNewsConnector,
     MiskProgramsConnector,
+    MonshaatAcademyConnector,
     PublicATSConnector,
     _ats_location,
     _ats_opportunity_type,
@@ -151,6 +152,52 @@ def test_misk_connector_collects_only_open_technical_programs() -> None:
     assert candidate.deadline == date(2026, 11, 30)
     assert candidate.delivery_mode == DeliveryMode.ONLINE
     assert candidate.accepted_majors == ["جميع التخصصات التقنية"]
+    assert candidate.technical_focus is True
+    assert VerificationAgent().verify(candidate).status == VerificationStatus.VERIFIED
+    client.close()
+
+
+def test_monshaat_connector_checks_category_registration_and_cost() -> None:
+    listing = """
+    <div class="new_card_container">
+      <div class="new_card_container--title">
+        <a href="/local/course/enrol.php?id=1307"><h2>تحليل البيانات</h2></a>
+      </div>
+      <div class="category-tag">برنامج إلكتروني مستمر</div>
+      <div class="new_card_tag">التقنية والابتكار</div>
+    </div>
+    <div class="new_card_container">
+      <div class="new_card_container--title">
+        <a href="/local/course/enrol.php?id=9"><h2>برنامج مغلق</h2></a>
+      </div>
+      <div class="category-tag">برنامج إلكتروني مستمر</div>
+      <div class="new_card_tag">التقنية والابتكار</div>
+    </div>
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "www.monshaat.gov.sa":
+            return httpx.Response(200, text="خدمات التدريب خدمة مجانية")
+        if request.method == "POST":
+            assert "category_list%5B%5D=10" in request.content.decode()
+            return httpx.Response(200, json={"main": listing, "total_courses": 2})
+        if request.url.params.get("id") == "1307":
+            return httpx.Response(
+                200,
+                text="أكاديمية منشآت التقنية والابتكار برنامج إلكتروني مستمر سجل الآن",
+            )
+        return httpx.Response(200, text="أكاديمية منشآت التسجيل مغلق")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    connector = MonshaatAcademyConnector(client=client)
+
+    candidates = connector.collect(today=date(2026, 8, 15))
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.title == "تحليل البيانات"
+    assert candidate.delivery_mode == DeliveryMode.ONLINE
+    assert candidate.is_free is True
     assert candidate.technical_focus is True
     assert VerificationAgent().verify(candidate).status == VerificationStatus.VERIFIED
     client.close()
@@ -424,7 +471,7 @@ def test_public_ats_connector_normalizes_three_official_providers() -> None:
 def test_default_ats_boards_have_independent_health_identities() -> None:
     boards = default_ats_boards()
 
-    assert len(boards) == 7
+    assert len(boards) == 9
     assert {board.organization for board in boards} >= {"Tamara", "HALA", "TSMG"}
     assert all(board.source_id for board in boards)
     assert len({board.source_id for board in boards}) == len(boards)
@@ -434,9 +481,14 @@ def test_ats_taxonomy_covers_early_career_types_and_locations() -> None:
     assert _ats_opportunity_type("Software CO-OP") == OpportunityType.COOP
     assert _ats_opportunity_type("Developer part-time") == OpportunityType.PART_TIME_JOB
     assert _ats_opportunity_type("Technology graduate program") == OpportunityType.GRADUATE_PROGRAM
+    assert (
+        _ats_opportunity_type("Software engineer - graduate level")
+        == OpportunityType.GRADUATE_PROGRAM
+    )
     assert _ats_opportunity_type("Junior software engineer") == OpportunityType.ENTRY_LEVEL_JOB
     assert _ats_opportunity_type("Senior accountant") is None
     assert _ats_location("Saudi Arabia", "remote") == ("عن بُعد", DeliveryMode.ONLINE)
+    assert _ats_location("Home based - Middle East", "") == ("عن بُعد", DeliveryMode.ONLINE)
     assert _ats_location("Jeddah", "on-site") == (None, DeliveryMode.IN_PERSON)
     assert _ats_remote_scope_allowed("Saudi Arabia") is True
     assert _ats_remote_scope_allowed("Middle East") is True

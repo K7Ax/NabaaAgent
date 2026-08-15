@@ -45,8 +45,8 @@ downloads source pages, and returns structured observations with latency and met
 For Tuwaiq programs it reads the academy's expanded first-party listing API. When Cloudflare
 blocks server-side API traffic, it reads recent explicit registration posts from Tuwaiq's
 official public channel; indexed official pages are a final fail-closed fallback. Deterministic
-connectors also cover the Misk catalogue and current KSU news opportunities. Unknown locations
-remain `unknown` rather than being guessed as Riyadh or remote.
+connectors also cover the Misk and Monsha'at Academy catalogues and current KSU news
+opportunities. Unknown locations remain `unknown` rather than being guessed as Riyadh or remote.
 For sources without a first-party connector, optional Tavily advanced search supplies
 ranked extracted content from outside sources and records credit usage/request IDs. DDGS and safe page opening
 remain the fallback, so Tavily is not a single point of failure.
@@ -63,6 +63,9 @@ provider is unavailable or rate limited.
 The compiled graph uses a SQLite checkpointer. Every run has a stable `thread_id`. When an
 uncertain opportunity reaches the approval node, LangGraph persists the state and pauses.
 The process can later resume with `Command(resume=...)` using the same `thread_id`.
+Authoritative connector inventory is stored separately from opportunity payloads. A successful
+source crawl reconciles its owned URLs and expires removed records; failed crawls never delete
+inventory.
 
 ## Security baseline
 
