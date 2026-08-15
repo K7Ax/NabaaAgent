@@ -130,6 +130,13 @@ def test_signed_ingestion_accepts_verified_and_rejects_bad_signature(
 ) -> None:
     import opportunity_sentinel.api as api_module
 
+    delegated: list[object] = []
+    original_to_thread = api_module.asyncio.to_thread
+
+    async def tracking_to_thread(function, *args):
+        delegated.append(function)
+        return await original_to_thread(function, *args)
+
     secret = "test-internal-secret"
     settings = Settings(
         data_db_path=tmp_path / "api.sqlite",
@@ -138,6 +145,7 @@ def test_signed_ingestion_accepts_verified_and_rejects_bad_signature(
         telegram_bot_token=None,
     )
     monkeypatch.setattr(api_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(api_module.asyncio, "to_thread", tracking_to_thread)
     body = json.dumps(
         {"source_id": "web-discovery", "candidates": [_candidate().model_dump(mode="json")]},
         default=str,
@@ -197,8 +205,9 @@ def test_signed_ingestion_accepts_verified_and_rejects_bad_signature(
             },
         )
 
-    assert denied.status_code == 401
-    assert accepted.status_code == 200
+        assert denied.status_code == 401
+        assert accepted.status_code == 200
+        assert api_module._ingest_batch_sync in delegated
     assert accepted.json()["verified"] == 1
     assert quota.json() == {"granted": True}
     assert sources.status_code == 200

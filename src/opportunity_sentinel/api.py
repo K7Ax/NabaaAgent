@@ -132,6 +132,29 @@ async def ingest_batch(request: Request) -> dict[str, int]:
     _verify_internal_request(request, raw)
     batch = IngestBatch.model_validate_json(raw)
     state = _state(request)
+    result, pending_reviews = await asyncio.to_thread(_ingest_batch_sync, state, batch)
+    if state.bot and state.settings.telegram_admin_chat_id:
+        for review_id, title in pending_reviews:
+            try:
+                await state.bot.send_message(
+                    state.settings.telegram_admin_chat_id,
+                    "⚠️ فرصة محتجزة تحتاج استكمال دليل\n\n"
+                    f"{html.escape(title)}\n"
+                    f"مراجعة رقم: {review_id}",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "admin_review_notification_failed",
+                    review_id=review_id,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+    return result
+
+
+def _ingest_batch_sync(
+    state: ServiceState, batch: IngestBatch
+) -> tuple[dict[str, int], list[tuple[int, str]]]:
+    """Persist a discovery batch without blocking the ASGI event loop."""
     run_id = state.repository.start_crawl(batch.source_id)
     verifier = VerificationAgent()
     owners_by_url = {
@@ -141,6 +164,7 @@ async def ingest_batch(request: Request) -> dict[str, int]:
     }
     verified = 0
     rejected = 0
+    pending_reviews: list[tuple[int, str]] = []
     try:
         for candidate in batch.candidates:
             state.repository.record_signal(
@@ -166,13 +190,8 @@ async def ingest_batch(request: Request) -> dict[str, int]:
                     review_id = state.repository.queue_admin_review(
                         candidate, ", ".join(report.missing_fields or report.reasons)
                     )
-                    if review_id and state.bot and state.settings.telegram_admin_chat_id:
-                        await state.bot.send_message(
-                            state.settings.telegram_admin_chat_id,
-                            "⚠️ فرصة محتجزة تحتاج استكمال دليل\n\n"
-                            f"{html.escape(candidate.title)}\n"
-                            f"مراجعة رقم: {review_id}",
-                        )
+                    if review_id:
+                        pending_reviews.append((review_id, candidate.title))
         state.repository.finish_crawl(run_id, len(batch.candidates), verified)
         for source_id, report in batch.source_reports.items():
             source_run_id = state.repository.start_crawl(source_id)
@@ -192,7 +211,10 @@ async def ingest_batch(request: Request) -> dict[str, int]:
             run_id, len(batch.candidates), verified, f"{type(exc).__name__}: {exc}"
         )
         raise
-    return {"received": len(batch.candidates), "verified": verified, "withheld": rejected}
+    return (
+        {"received": len(batch.candidates), "verified": verified, "withheld": rejected},
+        pending_reviews,
+    )
 
 
 @app.post("/internal/revalidate")
