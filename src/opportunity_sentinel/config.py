@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     internal_api_secret: str | None = None
     tavily_monthly_credit_limit: int = Field(default=900, ge=0, le=1000)
     digest_hour_riyadh: int = Field(default=18, ge=0, le=23)
-    delivery_batch_size: int = Field(default=100, ge=1, le=500)
+    delivery_batch_size: int = Field(default=10, ge=1, le=100)
 
 
 @lru_cache
