@@ -85,7 +85,7 @@ def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    if below_target:
+    if args.api_url and below_target:
         print(
             f"::warning title=Coverage below target::Production recall is {score}% "
             f"against a target of {args.target_recall}%.",
