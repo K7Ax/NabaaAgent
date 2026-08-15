@@ -119,7 +119,7 @@ def create_runtime(
     tavily_quota_guard: Callable[[int], bool] | None = None,
 ) -> BotRuntime:
     settings = settings or get_settings()
-    repository = repository or Repository(settings.data_db_path)
+    repository = repository or Repository.from_settings(settings)
     llm = build_model_router(
         groq_api_key=settings.groq_api_key,
         openrouter_api_key=settings.openrouter_api_key,

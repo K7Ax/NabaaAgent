@@ -87,7 +87,7 @@ def main() -> None:
     queries = _queries(args.mode)
     local_quota_repository = None
     if quota_guard is None:
-        local_quota_repository = Repository(get_settings().data_db_path)
+        local_quota_repository = Repository.from_settings(get_settings())
 
         def local_quota_guard(units: int) -> bool:
             return local_quota_repository.consume_quota(
@@ -110,7 +110,7 @@ def main() -> None:
 
 def _revalidate_local() -> dict[str, object]:
     settings = get_settings()
-    repository = Repository(settings.data_db_path)
+    repository = Repository.from_settings(settings)
     run_id = repository.start_crawl("revalidation")
     checked = opened = unavailable = 0
     expired = repository.expire_stale()
@@ -459,7 +459,7 @@ def _save_local(
     source_inventory: dict[str, list[str]] | None = None,
 ) -> dict[str, object]:
     settings = get_settings()
-    repository = Repository(settings.data_db_path)
+    repository = Repository.from_settings(settings)
     run_id = repository.start_crawl(source_id)
     verifier = VerificationAgent()
     verified = withheld = 0

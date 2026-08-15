@@ -4,6 +4,7 @@ import hashlib
 import json
 import sqlite3
 import uuid
+from collections.abc import Iterable, Iterator, Sequence
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -17,16 +18,121 @@ from opportunity_sentinel.models import (
 from opportunity_sentinel.taxonomy import KSU_TAXONOMY, KSU_TAXONOMY_VERSION
 
 
+class DatabaseRow:
+    """Small sqlite3.Row-compatible value used by the remote libSQL driver."""
+
+    def __init__(self, columns: Sequence[str], values: Sequence[Any]) -> None:
+        self._columns = tuple(columns)
+        self._values = tuple(values)
+        self._index = {name: index for index, name in enumerate(self._columns)}
+
+    def __getitem__(self, key: int | str) -> Any:
+        if isinstance(key, str):
+            return self._values[self._index[key]]
+        return self._values[key]
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def keys(self) -> list[str]:
+        return list(self._columns)
+
+
+class MappingCursor:
+    def __init__(self, cursor: Any) -> None:
+        self._cursor = cursor
+        self._columns = tuple(item[0] for item in (cursor.description or ()))
+
+    @property
+    def lastrowid(self) -> int | None:
+        return self._cursor.lastrowid
+
+    @property
+    def rowcount(self) -> int:
+        return self._cursor.rowcount
+
+    def _row(self, value: Sequence[Any] | None) -> DatabaseRow | None:
+        return DatabaseRow(self._columns, value) if value is not None else None
+
+    def fetchone(self) -> DatabaseRow | None:
+        return self._row(self._cursor.fetchone())
+
+    def fetchall(self) -> list[DatabaseRow]:
+        return [DatabaseRow(self._columns, row) for row in self._cursor.fetchall()]
+
+    def __iter__(self) -> Iterator[DatabaseRow]:
+        for row in self._cursor.fetchall():
+            yield DatabaseRow(self._columns, row)
+
+
+class MappingConnection:
+    """Normalize libSQL tuple rows to the mapping API used by Repository."""
+
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    def execute(self, sql: str, parameters: Sequence[Any] = ()) -> MappingCursor:
+        return MappingCursor(self._connection.execute(sql, parameters))
+
+    def executemany(
+        self, sql: str, parameters: Iterable[Sequence[Any]]
+    ) -> MappingCursor:
+        return MappingCursor(self._connection.executemany(sql, parameters))
+
+    def executescript(self, sql: str) -> None:
+        self._connection.executescript(sql)
+
+    def commit(self) -> None:
+        self._connection.commit()
+
+    def close(self) -> None:
+        self._connection.close()
+
+
 class Repository:
     """SQLite system of record with additive migrations for the original capstone DB."""
 
-    def __init__(self, path: Path) -> None:
-        self.connection = sqlite3.connect(path, check_same_thread=False, timeout=30)
-        self.connection.row_factory = sqlite3.Row
-        self.connection.execute("PRAGMA journal_mode=WAL")
+    def __init__(
+        self,
+        path: Path,
+        database_url: str | None = None,
+        auth_token: str | None = None,
+    ) -> None:
+        if database_url and database_url.startswith("libsql://"):
+            if not auth_token:
+                raise RuntimeError("TURSO_AUTH_TOKEN is required with a remote DATABASE_URL")
+            try:
+                import libsql
+            except ImportError as exc:  # pragma: no cover - deployment dependency guard
+                raise RuntimeError("Install the libsql package for remote DATABASE_URL") from exc
+            raw_connection = libsql.connect(
+                database=database_url,
+                auth_token=auth_token,
+                timeout=30,
+                _check_same_thread=False,
+            )
+            self.connection: Any = MappingConnection(raw_connection)
+            self.backend = "turso"
+        else:
+            connection = sqlite3.connect(path, check_same_thread=False, timeout=30)
+            connection.row_factory = sqlite3.Row
+            self.connection = connection
+            self.backend = "sqlite"
+            self.connection.execute("PRAGMA journal_mode=WAL")
+            self.connection.execute("PRAGMA busy_timeout=30000")
         self.connection.execute("PRAGMA foreign_keys=ON")
-        self.connection.execute("PRAGMA busy_timeout=30000")
         self._setup()
+
+    @classmethod
+    def from_settings(cls, settings: Any) -> Repository:
+        return cls(
+            settings.data_db_path,
+            database_url=settings.database_url,
+            auth_token=settings.turso_auth_token,
+        )
 
     def _setup(self) -> None:
         self.connection.executescript(
@@ -822,7 +928,7 @@ class Repository:
                 (profile.telegram_id, opportunity_id, kind, due, _now()),
             )
 
-    def due_deliveries(self, limit: int = 100) -> list[sqlite3.Row]:
+    def due_deliveries(self, limit: int = 100) -> list[Any]:
         return self.connection.execute(
             """SELECT q.*,o.payload,m.score,m.reasons FROM delivery_queue q
                JOIN opportunities o ON o.id=q.opportunity_id

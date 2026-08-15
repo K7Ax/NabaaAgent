@@ -2,10 +2,10 @@
 
 ## Runtime boundary
 
-When the production service is configured, it owns the durable database, Telegram webhook,
+When the production service is configured, it owns the durable Turso database, Telegram webhook,
 matching, lifecycle, and delivery queue. GitHub Actions is stateless and only performs
-collection. The repository workflow is currently manual-only until that durable API and its
-signed-ingestion secrets exist; local polling remains the development runtime.
+collection. The scheduled workflow fails closed until that durable API and its signed-ingestion
+secrets exist; local SQLite and polling remain the development runtime.
 All mutations sent by Actions use `HMAC-SHA256(timestamp + "." + body)` and are rejected
 after five minutes. Telegram uses its independent webhook secret header.
 

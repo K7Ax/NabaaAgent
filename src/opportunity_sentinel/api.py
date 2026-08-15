@@ -48,7 +48,7 @@ class QuotaReservation(BaseModel):
 async def lifespan(app: FastAPI):
     settings = get_settings()
     configure_logging(settings.log_level)
-    repository = Repository(settings.data_db_path)
+    repository = Repository.from_settings(settings)
     state = ServiceState(settings=settings, repository=repository)
     if settings.telegram_bot_token:
         runtime = create_runtime(settings, repository=repository)
@@ -92,6 +92,7 @@ def readiness(request: Request) -> dict[str, object]:
     return {
         "status": "ready" if database_ready else "not_ready",
         "database_ready": database_ready,
+        "database_backend": state.repository.backend,
         "telegram_configured": bool(state.settings.telegram_bot_token),
         "webhook_configured": bool(
             state.settings.public_base_url and state.settings.telegram_webhook_secret

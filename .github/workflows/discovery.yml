@@ -1,9 +1,9 @@
 name: Central Opportunity Discovery
 
 on:
-  # Keep cloud discovery manual until a persistent Nabaa API is deployed and
-  # NABAA_API_URL / INTERNAL_API_SECRET are configured in GitHub Actions.
-  # The Telegram bot's local scheduler continues to run independently.
+  schedule:
+    # Offset from the top of the hour to reduce GitHub schedule congestion.
+    - cron: "17,47 * * * *"
   workflow_dispatch:
     inputs:
       mode:
@@ -31,23 +31,51 @@ jobs:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
     steps:
+      - name: Require the durable production API
+        id: preflight
+        shell: bash
+        run: |
+          if [[ -n "$NABAA_API_URL" && -n "$INTERNAL_API_SECRET" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Discovery skipped safely: configure NABAA_API_URL and INTERNAL_API_SECRET first."
+          fi
       - uses: actions/checkout@v4
+        if: ${{ steps.preflight.outputs.ready == 'true' }}
       - uses: actions/setup-python@v5
+        if: ${{ steps.preflight.outputs.ready == 'true' }}
         with:
           python-version: "3.12"
           cache: pip
-      - run: python -m pip install -e .
+      - if: ${{ steps.preflight.outputs.ready == 'true' }}
+        run: python -m pip install -e .
       - name: Select job mode
         id: mode
+        if: ${{ steps.preflight.outputs.ready == 'true' }}
         shell: bash
         run: |
-          echo "value=${{ inputs.mode }}" >> "$GITHUB_OUTPUT"
-      - name: Run selected job
-        if: ${{ steps.mode.outputs.value != 'deliver' }}
-        run: python scripts/scheduled_job.py "${{ steps.mode.outputs.value }}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "value=${{ inputs.mode }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          hour=$((10#$(date -u +%H)))
+          minute=$((10#$(date -u +%M)))
+          modes="fast"
+          if (( hour % 8 == 0 && minute < 30 )); then
+            modes="$modes deep"
+          fi
+          if (( hour == 0 && minute >= 30 )); then
+            modes="$modes revalidate"
+          fi
+          echo "value=$modes" >> "$GITHUB_OUTPUT"
+      - name: Run due central collectors
+        if: ${{ steps.preflight.outputs.ready == 'true' && steps.mode.outputs.value != 'deliver' }}
+        shell: bash
+        run: |
+          for mode in ${{ steps.mode.outputs.value }}; do
+            python scripts/scheduled_job.py "$mode"
+          done
       - name: Deliver queued matches
-        if: ${{ success() && env.NABAA_API_URL != '' && env.INTERNAL_API_SECRET != '' }}
+        if: ${{ success() && steps.preflight.outputs.ready == 'true' }}
         run: python scripts/scheduled_job.py deliver
-      - name: Explain skipped delivery
-        if: ${{ success() && (env.NABAA_API_URL == '' || env.INTERNAL_API_SECRET == '') }}
-        run: echo "::notice::Delivery skipped because NABAA_API_URL and INTERNAL_API_SECRET are not configured."

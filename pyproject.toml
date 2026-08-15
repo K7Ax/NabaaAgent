@@ -16,6 +16,7 @@ dependencies = [
   "httpx>=0.28,<1",
   "langgraph>=1.0,<2",
   "langgraph-checkpoint-sqlite>=3.0,<4",
+  "libsql>=0.1,<1",
   "pydantic>=2.11,<3",
   "pydantic-settings>=2.10,<3",
   "structlog>=25.4,<26",

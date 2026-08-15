@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import libsql
+
 from opportunity_sentinel.agents import DiscoveryAgent
 from opportunity_sentinel.models import OpportunityType, StudentProfile
 from opportunity_sentinel.repository import Repository
@@ -57,3 +59,34 @@ def test_authoritative_source_reconciliation_expires_removed_inventory(
     ).fetchone()
     assert row["status"] == "expired"
     assert row["lifecycle"] == "expired"
+
+
+def test_turso_backend_preserves_sqlite_row_contract(
+    tmp_path: Path, monkeypatch, verified_page: SourcePage
+) -> None:
+    real_connect = libsql.connect
+    remote_file = tmp_path / "remote-compatible.db"
+    monkeypatch.setattr(
+        libsql,
+        "connect",
+        lambda **_kwargs: real_connect(str(remote_file), _check_same_thread=False),
+    )
+
+    repository = Repository(
+        tmp_path / "unused-local.db",
+        database_url="libsql://nabaa-test.turso.io",
+        auth_token="test-token",
+    )
+    profile = StudentProfile(
+        telegram_id=991,
+        major="هندسة البرمجيات",
+        graduation_year=2027,
+        preferred_types={OpportunityType.COURSE},
+    )
+    repository.upsert_profile(profile)
+
+    assert repository.backend == "turso"
+    assert repository.get_profile(991) == profile
+    row = repository.connection.execute("SELECT 7 AS value").fetchone()
+    assert row is not None
+    assert dict(row) == {"value": 7}

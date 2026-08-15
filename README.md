@@ -61,15 +61,21 @@ Copy-Item .env.example .env
 يظل `opportunity-bot` متاحًا للتطوير المحلي باستخدام Long Polling، لكنه لا يشغل
 بحثًا دوريًا لكل طالب. بيئة الإنتاج تستخدم Webhook فقط.
 
-## نشر Railway
+## نشر مجاني دائم للبيانات: Koyeb + Turso
 
-أنشئ خدمة واحدة من Dockerfile واربط Volume بالمسار `/app/data`. أضف المتغيرات:
+المسار المجاني الموصى به هو خدمة Webhook واحدة من `Dockerfile` على Koyeb، وقاعدة
+Turso البعيدة المتوافقة مع SQLite. الخدمة قد تنام عند الخمول، لكن Telegram أو دورة
+GitHub توقظها بطلب HTTP، بينما تبقى البيانات خارج القرص المؤقت للخدمة.
+
+أنشئ قاعدة Turso ثم خدمة Web من المستودع، وأضف المتغيرات:
 
 ```dotenv
 APP_ENV=production
-DATA_DB_PATH=/app/data/opportunity_sentinel.db
-CHECKPOINT_DB_PATH=/app/data/opportunity_checkpoints.sqlite
-PUBLIC_BASE_URL=https://YOUR-SERVICE.up.railway.app
+DATABASE_URL=libsql://YOUR-DATABASE.turso.io
+TURSO_AUTH_TOKEN=...
+DATA_DB_PATH=/tmp/opportunity_sentinel.db
+CHECKPOINT_DB_PATH=/tmp/opportunity_checkpoints.sqlite
+PUBLIC_BASE_URL=https://YOUR-SERVICE.koyeb.app
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_ADMIN_CHAT_ID=...
 TELEGRAM_WEBHOOK_SECRET=RANDOM_LONG_VALUE
@@ -91,7 +97,8 @@ TAVILY_MONTHLY_CREDIT_LIMIT=900
 - `INTERNAL_API_SECRET`: نفس القيمة الموجودة في Railway.
 - `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `TAVILY_API_KEY`.
 
-Workflow المسمى `Central Opportunity Discovery` ينفذ:
+Workflow المسمى `Central Opportunity Discovery` يعمل تلقائيًا فقط بعد وجود
+`NABAA_API_URL` و`INTERNAL_API_SECRET`، وينفذ:
 
 - `fast`: موصلات طويق (API ثم القناة الرسمية عند حجب Cloudflare)، مهارات المستقبل،
   كتالوج مسك وأكاديمية منشآت، أخبار وبوابة خريجي KSU، الأكاديمية المالية، ولوحات الشركات الرسمية
@@ -104,9 +111,9 @@ Workflow المسمى `Central Opportunity Discovery` ينفذ:
 كل فرصة مرتبطة بموصلها في قاعدة البيانات. إذا أكمل المصدر الرسمي دورة ناجحة ولم
 تعد الفرصة ضمن كتالوجه، تُسحب من النتائج ويُلغى إرسالها المعلّق تلقائيًا.
 
-يمكن تشغيل أي وضع يدويًا من GitHub دون تغيير الكود.
-الجدولة التلقائية ليست مفعلة حاليًا؛ تفعيلها قبل وجود API وقاعدة بيانات دائمين
-سيصنع تشغيلات مؤقتة لا تخدم مستخدمي البوت.
+يمكن تشغيل أي وضع يدويًا من GitHub دون تغيير الكود. الجدولة تفحص المصادر الرسمية
+كل 30 دقيقة، وتشغّل البحث العميق عند 00:17 و08:17 و16:17 UTC، وإعادة التحقق
+اليومية بعد 00:47 UTC. إذا كانت أسرار الإنتاج ناقصة تتوقف الدورة بأمان قبل البحث.
 
 ## قياس التغطية
 
