@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 
-from opportunity_sentinel.models import OpportunityType
+from opportunity_sentinel.models import OpportunityCandidate, OpportunityType
 from opportunity_sentinel.repository import Repository
 
 RIYADH = timezone(timedelta(hours=3), name="Asia/Riyadh")
@@ -62,17 +62,25 @@ def evaluate_repository_coverage(
 ) -> dict[str, Any]:
     """Compare an independent benchmark with verified production inventory."""
     report = repository.coverage_snapshot()
-    verified_urls = {
-        str(row["application_url"]).strip().rstrip("/")
-        for row in repository.connection.execute(
-            "SELECT application_url FROM opportunities WHERE status='verified'"
-        ).fetchall()
-    }
+    verified_urls: set[str] = set()
+    verified_rows = repository.connection.execute(
+        "SELECT application_url,payload FROM opportunities WHERE status='verified'"
+    ).fetchall()
+    for row in verified_rows:
+        candidate = OpportunityCandidate.model_validate_json(row["payload"])
+        verified_urls.update(
+            _normalized_url(value)
+            for value in (
+                str(row["application_url"]),
+                str(candidate.application_url),
+                str(candidate.source_url),
+            )
+        )
     expected = [item for item in benchmark.opportunities if item.expected_open]
     missed = [
         item
         for item in expected
-        if str(item.application_url).strip().rstrip("/") not in verified_urls
+        if _normalized_url(str(item.application_url)) not in verified_urls
     ]
     detected = len(expected) - len(missed)
     complete_sources = [
@@ -115,3 +123,7 @@ def evaluate_repository_coverage(
 
 def _riyadh_today() -> date:
     return datetime.now(RIYADH).date()
+
+
+def _normalized_url(value: str) -> str:
+    return value.strip().rstrip("/")

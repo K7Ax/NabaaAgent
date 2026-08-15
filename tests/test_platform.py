@@ -325,7 +325,7 @@ def test_review_queue_source_health_and_revalidation_state(tmp_path: Path) -> No
 
 def test_source_registry_and_coverage_report_are_honest(tmp_path: Path) -> None:
     repository = Repository(tmp_path / "coverage.sqlite")
-    candidate = _candidate()
+    candidate = _candidate(application_url="https://ksu.edu.sa/apply/student-program")
     repository.save_opportunity(candidate, 1.0)
 
     sources = {source["id"]: source for source in repository.source_health()}
@@ -373,7 +373,7 @@ def test_source_registry_and_coverage_report_are_honest(tmp_path: Path) -> None:
                 "opportunities": [
                     {
                         "title": "KSU Student Program",
-                        "application_url": str(candidate.application_url),
+                        "application_url": str(candidate.source_url),
                         "source_id": "ksu-main",
                         "opportunity_type": "internship",
                         "expected_open": True,
