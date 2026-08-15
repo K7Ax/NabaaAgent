@@ -61,13 +61,14 @@ Copy-Item .env.example .env
 يظل `opportunity-bot` متاحًا للتطوير المحلي باستخدام Long Polling، لكنه لا يشغل
 بحثًا دوريًا لكل طالب. بيئة الإنتاج تستخدم Webhook فقط.
 
-## نشر مجاني دائم للبيانات: Koyeb + Turso
+## نشر مجاني دائم للبيانات: Render + Turso
 
-المسار المجاني الموصى به هو خدمة Webhook واحدة من `Dockerfile` على Koyeb، وقاعدة
-Turso البعيدة المتوافقة مع SQLite. الخدمة قد تنام عند الخمول، لكن Telegram أو دورة
-GitHub توقظها بطلب HTTP، بينما تبقى البيانات خارج القرص المؤقت للخدمة.
+المسار المجاني الموصى به للمشروع الطلابي هو خدمة Webhook واحدة من `Dockerfile` على
+Render، وقاعدة Turso البعيدة المتوافقة مع SQLite. خدمة Render المجانية تنام بعد
+15 دقيقة من الخمول، لذلك يرسل Workflow خفيف طلب `/health` كل 10 دقائق. تبقى
+البيانات خارج القرص المؤقت للخدمة، ولا يستخدم نبض الصحة Tavily أو LLM.
 
-أنشئ قاعدة Turso ثم خدمة Web من المستودع، وأضف المتغيرات:
+أنشئ قاعدة Turso ثم Render Web Service من المستودع، واختر Docker وFree، وأضف:
 
 ```dotenv
 APP_ENV=production
@@ -75,7 +76,7 @@ DATABASE_URL=libsql://YOUR-DATABASE.turso.io
 TURSO_AUTH_TOKEN=...
 DATA_DB_PATH=/tmp/opportunity_sentinel.db
 CHECKPOINT_DB_PATH=/tmp/opportunity_checkpoints.sqlite
-PUBLIC_BASE_URL=https://YOUR-SERVICE.koyeb.app
+PUBLIC_BASE_URL=https://YOUR-SERVICE.onrender.com
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_ADMIN_CHAT_ID=...
 TELEGRAM_WEBHOOK_SECRET=RANDOM_LONG_VALUE
@@ -114,6 +115,8 @@ Workflow المسمى `Central Opportunity Discovery` يعمل تلقائيًا 
 يمكن تشغيل أي وضع يدويًا من GitHub دون تغيير الكود. الجدولة تفحص المصادر الرسمية
 كل 30 دقيقة، وتشغّل البحث العميق عند 00:17 و08:17 و16:17 UTC، وإعادة التحقق
 اليومية بعد 00:47 UTC. إذا كانت أسرار الإنتاج ناقصة تتوقف الدورة بأمان قبل البحث.
+Workflow `Production Keepalive` لا يفعل شيئًا حتى يُضبط `NABAA_API_URL`، ثم يوقظ
+الخدمة فقط؛ هذه استضافة مجانية best-effort وليست اتفاقية توافر مدفوعة.
 
 ## قياس التغطية
 

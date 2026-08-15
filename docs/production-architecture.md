@@ -6,6 +6,8 @@ When the production service is configured, it owns the durable Turso database, T
 matching, lifecycle, and delivery queue. GitHub Actions is stateless and only performs
 collection. The scheduled workflow fails closed until that durable API and its signed-ingestion
 secrets exist; local SQLite and polling remain the development runtime.
+The free Render web service is kept warm by a separate ten-minute health-only workflow. The
+keepalive never invokes discovery providers and is disabled until `NABAA_API_URL` exists.
 All mutations sent by Actions use `HMAC-SHA256(timestamp + "." + body)` and are rejected
 after five minutes. Telegram uses its independent webhook secret header.
 
