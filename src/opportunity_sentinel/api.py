@@ -222,11 +222,14 @@ async def revalidate(request: Request) -> dict[str, int]:
     raw = await request.body()
     _verify_internal_request(request, raw)
     state = _state(request)
-    run_id = state.repository.start_crawl("revalidation")
-    expired = state.repository.expire_stale()
+    run_id = await asyncio.to_thread(state.repository.start_crawl, "revalidation")
+    expired = await asyncio.to_thread(state.repository.expire_stale)
     checked = opened = unavailable = 0
     try:
-        due = state.repository.due_revalidation(limit=state.settings.revalidation_batch_size)
+        due = await asyncio.to_thread(
+            state.repository.due_revalidation,
+            state.settings.revalidation_batch_size,
+        )
 
         async def check_application(identifier: str, candidate: OpportunityCandidate):
             try:
@@ -245,21 +248,35 @@ async def revalidate(request: Request) -> dict[str, int]:
         for identifier, result, error in results:
             checked += 1
             if error:
-                state.repository.record_revalidation(identifier, "unavailable", error)
+                await asyncio.to_thread(
+                    state.repository.record_revalidation,
+                    identifier,
+                    "unavailable",
+                    error,
+                )
                 unavailable += 1
                 continue
             assert result is not None
-            state.repository.record_revalidation(identifier, result.state, result.reason)
+            await asyncio.to_thread(
+                state.repository.record_revalidation,
+                identifier,
+                result.state,
+                result.reason,
+            )
             if result.state == "closed":
                 expired += 1
             elif result.state == "open":
                 opened += 1
             else:
                 unavailable += 1
-        state.repository.finish_crawl(run_id, checked, opened)
+        await asyncio.to_thread(state.repository.finish_crawl, run_id, checked, opened)
     except Exception as exc:
-        state.repository.finish_crawl(
-            run_id, checked, opened, f"{type(exc).__name__}: {exc}"
+        await asyncio.to_thread(
+            state.repository.finish_crawl,
+            run_id,
+            checked,
+            opened,
+            f"{type(exc).__name__}: {exc}",
         )
         raise
     return {"open": opened, "expired": expired, "unavailable": unavailable}
@@ -272,10 +289,13 @@ async def reserve_quota(request: Request) -> dict[str, bool]:
     reservation = QuotaReservation.model_validate_json(raw)
     state = _state(request)
     limit = state.settings.tavily_monthly_credit_limit if reservation.provider == "tavily" else 0
-    return {
-        "granted": bool(limit)
-        and state.repository.consume_quota(reservation.provider, reservation.units, limit)
-    }
+    granted = bool(limit) and await asyncio.to_thread(
+        state.repository.consume_quota,
+        reservation.provider,
+        reservation.units,
+        limit,
+    )
+    return {"granted": granted}
 
 
 @app.post("/internal/deliver")
@@ -285,7 +305,10 @@ async def deliver(request: Request) -> dict[str, int]:
     state = _state(request)
     if not state.bot:
         raise HTTPException(status_code=503, detail="telegram is not configured")
-    rows = state.repository.due_deliveries(state.settings.delivery_batch_size)
+    rows = await asyncio.to_thread(
+        state.repository.due_deliveries,
+        state.settings.delivery_batch_size,
+    )
     sent = failed = 0
     checked: dict[str, str] = {}
     digest_groups: dict[int, list] = {}
@@ -294,8 +317,17 @@ async def deliver(request: Request) -> dict[str, int]:
             digest_groups.setdefault(row["telegram_id"], []).append(row)
             continue
         candidate = OpportunityCandidate.model_validate_json(row["payload"])
-        if state.repository.was_delivered(row["telegram_id"], row["opportunity_id"]):
-            state.repository.complete_delivery(row["id"], row["telegram_id"], row["opportunity_id"])
+        if await asyncio.to_thread(
+            state.repository.was_delivered,
+            row["telegram_id"],
+            row["opportunity_id"],
+        ):
+            await asyncio.to_thread(
+                state.repository.complete_delivery,
+                row["id"],
+                row["telegram_id"],
+                row["opportunity_id"],
+            )
             continue
         validation_state = checked.get(row["opportunity_id"])
         if validation_state is None:
@@ -306,13 +338,20 @@ async def deliver(request: Request) -> dict[str, int]:
             )
             validation_state = validation.state
             checked[row["opportunity_id"]] = validation_state
-            state.repository.record_revalidation(
-                row["opportunity_id"], validation.state, validation.reason
+            await asyncio.to_thread(
+                state.repository.record_revalidation,
+                row["opportunity_id"],
+                validation.state,
+                validation.reason,
             )
         if validation_state == "closed":
             continue
         if validation_state != "open":
-            state.repository.fail_delivery(row["id"], "application page unavailable")
+            await asyncio.to_thread(
+                state.repository.fail_delivery,
+                row["id"],
+                "application page unavailable",
+            )
             failed += 1
             continue
         try:
@@ -324,17 +363,35 @@ async def deliver(request: Request) -> dict[str, int]:
                 reply_markup=opportunity_keyboard(row["opportunity_id"], candidate),
                 disable_web_page_preview=True,
             )
-            state.repository.complete_delivery(row["id"], row["telegram_id"], row["opportunity_id"])
+            await asyncio.to_thread(
+                state.repository.complete_delivery,
+                row["id"],
+                row["telegram_id"],
+                row["opportunity_id"],
+            )
             sent += 1
         except Exception as exc:
-            state.repository.fail_delivery(row["id"], f"{type(exc).__name__}: {exc}")
+            await asyncio.to_thread(
+                state.repository.fail_delivery,
+                row["id"],
+                f"{type(exc).__name__}: {exc}",
+            )
             failed += 1
     for telegram_id, items in digest_groups.items():
         valid: list[tuple[object, OpportunityCandidate]] = []
         for row in items[:10]:
             candidate = OpportunityCandidate.model_validate_json(row["payload"])
-            if state.repository.was_delivered(telegram_id, row["opportunity_id"]):
-                state.repository.complete_delivery(row["id"], telegram_id, row["opportunity_id"])
+            if await asyncio.to_thread(
+                state.repository.was_delivered,
+                telegram_id,
+                row["opportunity_id"],
+            ):
+                await asyncio.to_thread(
+                    state.repository.complete_delivery,
+                    row["id"],
+                    telegram_id,
+                    row["opportunity_id"],
+                )
                 continue
             validation_state = checked.get(row["opportunity_id"])
             if validation_state is None:
@@ -345,13 +402,20 @@ async def deliver(request: Request) -> dict[str, int]:
                 )
                 validation_state = validation.state
                 checked[row["opportunity_id"]] = validation_state
-                state.repository.record_revalidation(
-                    row["opportunity_id"], validation.state, validation.reason
+                await asyncio.to_thread(
+                    state.repository.record_revalidation,
+                    row["opportunity_id"],
+                    validation.state,
+                    validation.reason,
                 )
             if validation_state == "open":
                 valid.append((row, candidate))
             elif validation_state == "unavailable":
-                state.repository.fail_delivery(row["id"], "application page unavailable")
+                await asyncio.to_thread(
+                    state.repository.fail_delivery,
+                    row["id"],
+                    "application page unavailable",
+                )
                 failed += 1
         if not valid:
             continue
@@ -366,11 +430,20 @@ async def deliver(request: Request) -> dict[str, int]:
                 telegram_id, "\n".join(lines), disable_web_page_preview=True
             )
             for row, _ in valid:
-                state.repository.complete_delivery(row["id"], telegram_id, row["opportunity_id"])
+                await asyncio.to_thread(
+                    state.repository.complete_delivery,
+                    row["id"],
+                    telegram_id,
+                    row["opportunity_id"],
+                )
             sent += len(valid)
         except Exception as exc:
             for row, _ in valid:
-                state.repository.fail_delivery(row["id"], f"{type(exc).__name__}: {exc}")
+                await asyncio.to_thread(
+                    state.repository.fail_delivery,
+                    row["id"],
+                    f"{type(exc).__name__}: {exc}",
+                )
             failed += len(valid)
     return {"sent": sent, "failed": failed}
 
