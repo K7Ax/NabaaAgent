@@ -19,7 +19,7 @@ from opportunity_sentinel.config import Settings, get_settings
 from opportunity_sentinel.logging import configure_logging, logger
 from opportunity_sentinel.models import OpportunityCandidate, VerificationStatus
 from opportunity_sentinel.repository import Repository
-from opportunity_sentinel.revalidation import revalidate_application
+from opportunity_sentinel.revalidation import RevalidationResult, revalidate_application
 from opportunity_sentinel.telegram_bot import BotRuntime, build_router, create_runtime
 
 
@@ -311,6 +311,49 @@ async def deliver(request: Request) -> dict[str, int]:
     )
     sent = failed = 0
     checked: dict[str, str] = {}
+    candidates_by_id = {
+        str(row["opportunity_id"]): OpportunityCandidate.model_validate_json(row["payload"])
+        for row in rows
+    }
+
+    async def check_delivery_application(
+        opportunity_id: str, candidate: OpportunityCandidate
+    ) -> tuple[str, RevalidationResult | None, str | None]:
+        try:
+            validation = await asyncio.to_thread(
+                revalidate_application,
+                candidate,
+                state.settings.request_timeout_seconds,
+            )
+            return opportunity_id, validation, None
+        except Exception as exc:
+            return opportunity_id, None, f"{type(exc).__name__}: {exc}"
+
+    validation_results = await asyncio.gather(
+        *(
+            check_delivery_application(opportunity_id, candidate)
+            for opportunity_id, candidate in candidates_by_id.items()
+        )
+    )
+    for opportunity_id, validation, error in validation_results:
+        if error:
+            checked[opportunity_id] = "unavailable"
+            await asyncio.to_thread(
+                state.repository.record_revalidation,
+                opportunity_id,
+                "unavailable",
+                error,
+            )
+            continue
+        assert validation is not None
+        checked[opportunity_id] = validation.state
+        await asyncio.to_thread(
+            state.repository.record_revalidation,
+            opportunity_id,
+            validation.state,
+            validation.reason,
+        )
+
     digest_groups: dict[int, list] = {}
     for row in rows:
         if row["delivery_kind"] == "digest":
@@ -329,21 +372,7 @@ async def deliver(request: Request) -> dict[str, int]:
                 row["opportunity_id"],
             )
             continue
-        validation_state = checked.get(row["opportunity_id"])
-        if validation_state is None:
-            validation = await asyncio.to_thread(
-                revalidate_application,
-                candidate,
-                state.settings.request_timeout_seconds,
-            )
-            validation_state = validation.state
-            checked[row["opportunity_id"]] = validation_state
-            await asyncio.to_thread(
-                state.repository.record_revalidation,
-                row["opportunity_id"],
-                validation.state,
-                validation.reason,
-            )
+        validation_state = checked[row["opportunity_id"]]
         if validation_state == "closed":
             continue
         if validation_state != "open":
@@ -393,21 +422,7 @@ async def deliver(request: Request) -> dict[str, int]:
                     row["opportunity_id"],
                 )
                 continue
-            validation_state = checked.get(row["opportunity_id"])
-            if validation_state is None:
-                validation = await asyncio.to_thread(
-                    revalidate_application,
-                    candidate,
-                    state.settings.request_timeout_seconds,
-                )
-                validation_state = validation.state
-                checked[row["opportunity_id"]] = validation_state
-                await asyncio.to_thread(
-                    state.repository.record_revalidation,
-                    row["opportunity_id"],
-                    validation.state,
-                    validation.reason,
-                )
+            validation_state = checked[row["opportunity_id"]]
             if validation_state == "open":
                 valid.append((row, candidate))
             elif validation_state == "unavailable":
