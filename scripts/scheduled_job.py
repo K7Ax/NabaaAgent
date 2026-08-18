@@ -11,6 +11,7 @@ import hmac
 import json
 import multiprocessing
 import os
+import random
 import re
 import time
 from collections.abc import Callable
@@ -49,6 +50,10 @@ def main() -> None:
     args = parser.parse_args()
     api_url = os.getenv("NABAA_API_URL", "").rstrip("/")
     secret = os.getenv("INTERNAL_API_SECRET", "")
+    if api_url and secret:
+        # Every mode below ends up posting to the API. Waking it first means the long
+        # crawl is not thrown away because the instance was still cold when it finished.
+        _wake(api_url)
     if args.mode in {"deliver", "revalidate"}:
         if not api_url or not secret:
             if args.mode == "revalidate":
@@ -582,23 +587,90 @@ def _reserve_quota(api_url: str, secret: str, units: int) -> bool:
     return bool(_signed_post(api_url, "/internal/quota/reserve", body, secret).get("granted"))
 
 
-def _signed_post(api_url: str, path: str, body: bytes, secret: str) -> dict:
-    timestamp = str(int(time.time()))
-    signature = hmac.new(
-        secret.encode(), timestamp.encode() + b"." + body, hashlib.sha256
-    ).hexdigest()
-    response = httpx.post(
-        api_url + path,
-        content=body,
-        headers={
-            "Content-Type": "application/json",
-            "X-Nabaa-Timestamp": timestamp,
-            "X-Nabaa-Signature": signature,
-        },
-        timeout=180,
+POST_ATTEMPTS = 4
+POST_TIMEOUT_SECONDS = 60
+WAKE_ATTEMPTS = 12
+WAKE_INTERVAL_SECONDS = 10
+RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
+
+
+def _wake(api_url: str) -> bool:
+    """Poll readiness until the free-tier service has finished cold-starting.
+
+    A suspended Render instance takes up to a minute to come back, and every job in
+    this file used to fail on that first request. Waiting here keeps a cold start from
+    looking like an outage.
+    """
+    if not api_url:
+        return False
+    for attempt in range(1, WAKE_ATTEMPTS + 1):
+        try:
+            response = httpx.get(api_url + "/readiness", timeout=15)
+            if response.status_code == 200:
+                if attempt > 1:
+                    print(json.dumps({"event": "api_woke", "attempts": attempt}))
+                return True
+        except httpx.HTTPError:
+            pass
+        time.sleep(WAKE_INTERVAL_SECONDS)
+    print(json.dumps({"event": "api_never_woke", "attempts": WAKE_ATTEMPTS}))
+    return False
+
+
+def _should_retry(exc: Exception) -> bool:
+    if isinstance(exc, httpx.TimeoutException | httpx.ConnectError | httpx.ReadError):
+        return True
+    return (
+        isinstance(exc, httpx.HTTPStatusError)
+        and exc.response.status_code in RETRYABLE_STATUS
     )
-    response.raise_for_status()
-    return response.json()
+
+
+def _signed_post(api_url: str, path: str, body: bytes, secret: str) -> dict:
+    """POST with an HMAC signature, retrying transient failures.
+
+    The signature covers a timestamp the API only accepts inside a short window, so each
+    attempt is signed again rather than replaying the first signature. Retries are safe
+    because ingest upserts on application_url and delivery deduplicates; a 4xx is our own
+    mistake and is never retried.
+    """
+    last: Exception | None = None
+    for attempt in range(1, POST_ATTEMPTS + 1):
+        timestamp = str(int(time.time()))
+        signature = hmac.new(
+            secret.encode(), timestamp.encode() + b"." + body, hashlib.sha256
+        ).hexdigest()
+        try:
+            response = httpx.post(
+                api_url + path,
+                content=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Nabaa-Timestamp": timestamp,
+                    "X-Nabaa-Signature": signature,
+                },
+                timeout=POST_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:  # noqa: BLE001 - re-raised below unless retryable
+            last = exc
+            if attempt == POST_ATTEMPTS or not _should_retry(exc):
+                raise
+            delay = 2**attempt + random.uniform(0, 1)
+            print(
+                json.dumps(
+                    {
+                        "event": "signed_post_retry",
+                        "path": path,
+                        "attempt": attempt,
+                        "sleep": round(delay, 2),
+                        "error": type(exc).__name__,
+                    }
+                )
+            )
+            time.sleep(delay)
+    raise last  # pragma: no cover - the loop always returns or raises
 
 
 if __name__ == "__main__":

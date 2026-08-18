@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import Update
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
 from opportunity_sentinel.agents import VerificationAgent
@@ -83,16 +83,33 @@ def health() -> dict[str, str]:
 
 
 @app.get("/readiness")
-def readiness(request: Request) -> dict[str, object]:
+def readiness(request: Request, response: Response) -> dict[str, object]:
     state = _state(request)
     try:
         state.repository.connection.execute("SELECT 1").fetchone()
         database_ready = True
     except Exception:
         database_ready = False
+    # Without DATABASE_URL the repository silently falls back to a SQLite file on the
+    # host's ephemeral disk. The service answers every request happily and loses every
+    # row on the next restart, so readiness has to treat it as an outage rather than
+    # letting the platform report a healthy instance.
+    durable_storage = (
+        state.repository.backend == "turso" or state.settings.app_env != "production"
+    )
+    ready = database_ready and durable_storage
+    if not ready:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        logger.error(
+            "readiness_failed",
+            database_ready=database_ready,
+            durable_storage=durable_storage,
+            backend=state.repository.backend,
+        )
     return {
-        "status": "ready" if database_ready else "not_ready",
+        "status": "ready" if ready else "not_ready",
         "database_ready": database_ready,
+        "durable_storage": durable_storage,
         "database_backend": state.repository.backend,
         "telegram_configured": bool(state.settings.telegram_bot_token),
         "webhook_configured": bool(

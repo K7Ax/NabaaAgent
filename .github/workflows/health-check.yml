@@ -1,0 +1,33 @@
+name: Production Health Check
+
+on:
+  schedule:
+    # Twice a day is enough to notice a real outage without turning the inbox into a
+    # monitoring dashboard. Readiness returns 503 when the database is unreachable or
+    # when production is running on ephemeral storage, so this catches a lost
+    # DATABASE_URL as well as a dead service.
+    - cron: "0 6,18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      NABAA_API_URL: ${{ secrets.NABAA_API_URL }}
+    steps:
+      - name: Assert production is ready
+        shell: bash
+        run: |
+          if [[ -z "$NABAA_API_URL" ]]; then
+            echo "::notice::Health check skipped safely: NABAA_API_URL is not configured."
+            exit 0
+          fi
+          body=$(curl --silent --show-error --fail \
+                   --retry 6 --retry-delay 20 --retry-all-errors --max-time 240 \
+                   "${NABAA_API_URL%/}/readiness")
+          echo "$body"
+          echo "$body" | grep -q '"status":"ready"'

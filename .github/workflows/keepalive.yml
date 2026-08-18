@@ -2,7 +2,12 @@ name: Production Keepalive
 
 on:
   schedule:
-    - cron: "3,13,23,33,43,53 * * * *"
+    # Render's free tier suspends a service after 15 idle minutes, but it also caps the
+    # account at 750 instance-hours a month. Pinging around the clock consumed ~744h and
+    # the service was suspended near month-end, which turned every scheduled run red.
+    # 02:00-20:59 UTC is 05:00-23:59 in Riyadh — the hours students actually use the bot
+    # — and costs ~570 instance-hours a month.
+    - cron: "*/10 2-20 * * *"
   workflow_dispatch:
 
 permissions:
@@ -15,7 +20,7 @@ concurrency:
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     env:
       NABAA_API_URL: ${{ secrets.NABAA_API_URL }}
     steps:
@@ -26,5 +31,14 @@ jobs:
             echo "::notice::Keepalive skipped safely: NABAA_API_URL is not configured."
             exit 0
           fi
-          curl --fail --silent --show-error --retry 2 --max-time 90 \
-            "${NABAA_API_URL%/}/health"
+          # A cold start takes the better part of a minute, so absorb it rather than
+          # reporting it. This job only wakes the service; health-check.yml is the one
+          # that reports genuine outages, so a missed ping here is a warning, not a
+          # failure email every ten minutes.
+          if curl --silent --show-error --fail --output /dev/null \
+               --retry 5 --retry-delay 15 --retry-all-errors --max-time 150 \
+               "${NABAA_API_URL%/}/health"; then
+            echo "::notice::Production is awake."
+          else
+            echo "::warning::Keepalive could not reach production; see health-check.yml."
+          fi

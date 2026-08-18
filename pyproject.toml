@@ -15,7 +15,6 @@ dependencies = [
   "fastapi>=0.116,<1",
   "httpx>=0.28,<1",
   "langchain>=1.0,<2",
-  "langchain-community>=0.3,<1",
   "langchain-groq>=0.3,<1",
   "langchain-openai>=0.3,<1",
   "langchain-text-splitters>=0.3,<1",
@@ -31,7 +30,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  # The retrieval tests exercise the real FAISS index; only the embedding model is
+  # substituted, so these two belong to the test job rather than the runtime image.
   "faiss-cpu>=1.9,<2",
+  "langchain-community>=0.3,<1",
   "pytest>=8.4,<9",
   "pytest-cov>=6.2,<7",
   "pytest-asyncio>=1.1,<2",
@@ -43,6 +45,7 @@ dev = [
 capstone = [
   "faiss-cpu>=1.9,<2",
   "jupyterlab>=4.2,<5",
+  "langchain-community>=0.3,<1",
   "langchain-huggingface>=0.3,<1",
   "sentence-transformers>=3.0,<6",
 ]
