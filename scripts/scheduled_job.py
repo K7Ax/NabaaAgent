@@ -120,7 +120,7 @@ def _revalidate_local() -> dict[str, object]:
     settings = get_settings()
     repository = Repository.from_settings(settings)
     run_id = repository.start_crawl("revalidation")
-    checked = opened = unavailable = 0
+    checked = opened = unverified = 0
     expired = repository.expire_stale()
     try:
         due = repository.due_revalidation(limit=settings.revalidation_batch_size)
@@ -141,9 +141,9 @@ def _revalidate_local() -> dict[str, object]:
                         result = future.result()
                     except Exception as exc:
                         repository.record_revalidation(
-                            identifier, "unavailable", f"{type(exc).__name__}: {exc}"
+                            identifier, "unverified", f"{type(exc).__name__}: {exc}"
                         )
-                        unavailable += 1
+                        unverified += 1
                         continue
                     repository.record_revalidation(identifier, result.state, result.reason)
                     if result.state == "closed":
@@ -151,14 +151,14 @@ def _revalidate_local() -> dict[str, object]:
                     elif result.state == "open":
                         opened += 1
                     else:
-                        unavailable += 1
+                        unverified += 1
         repository.finish_crawl(run_id, checked, opened)
         return {
             "mode": "local",
             "checked": checked,
             "open": opened,
             "expired": expired,
-            "unavailable": unavailable,
+            "unverified": unverified,
         }
     except Exception as exc:
         repository.finish_crawl(run_id, checked, opened, f"{type(exc).__name__}: {exc}")
