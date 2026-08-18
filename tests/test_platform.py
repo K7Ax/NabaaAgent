@@ -25,6 +25,10 @@ from opportunity_sentinel.tools import SourcePage
 from scripts.coverage_report import build_report
 
 
+async def _noop() -> None:
+    """Stand in for the aiogram session the lifespan closes on shutdown."""
+
+
 def _candidate(**changes: object) -> OpportunityCandidate:
     deadline = date.today() + timedelta(days=10)
     source = "https://ksu.edu.sa/opportunity"
@@ -388,3 +392,65 @@ def test_source_registry_and_coverage_report_are_honest(tmp_path: Path) -> None:
     measured = build_report(repository, gold_path)
     assert measured["recall"]["status"] == "measured"
     assert measured["recall"]["recall_percent"] == 100.0
+
+
+def test_delivery_reports_why_each_message_failed(tmp_path: Path, monkeypatch) -> None:
+    """A silently failing delivery queue is indistinguishable from an idle one.
+
+    Failures leave the row pending, so it is retried on every run and the pending count
+    never moves. Counting the reasons is what turns "nothing arrived" into a diagnosis.
+    """
+    import opportunity_sentinel.api as api_module
+    from opportunity_sentinel.revalidation import RevalidationResult
+
+    secret = "test-internal-secret"
+    settings = Settings(
+        data_db_path=tmp_path / "deliver.sqlite",
+        checkpoint_db_path=tmp_path / "deliver-checkpoints.sqlite",
+        internal_api_secret=secret,
+        telegram_bot_token=None,
+    )
+    monkeypatch.setattr(api_module, "get_settings", lambda: settings)
+
+    seed = Repository(settings.data_db_path)
+    seed.upsert_profile(
+        StudentProfile(
+            telegram_id=7,
+            major="هندسة البرمجيات",
+            graduation_year=2027,
+            preferred_types={OpportunityType.INTERNSHIP},
+        )
+    )
+    seed.save_opportunity(_candidate(), 1.0)
+    assert seed.due_deliveries()
+    seed.connection.close()
+
+    monkeypatch.setattr(
+        api_module,
+        "revalidate_application",
+        lambda candidate, timeout: RevalidationResult("open", "التسجيل مفتوح"),
+    )
+
+    class RefusingBot:
+        session = SimpleNamespace(close=_noop)
+
+        async def send_message(self, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("Forbidden: bot was blocked by the user")
+
+    timestamp = str(int(time.time()))
+    signature = hmac.new(
+        secret.encode(), timestamp.encode() + b".", hashlib.sha256
+    ).hexdigest()
+    with TestClient(api_module.app) as client:
+        api_module.app.state.service.bot = RefusingBot()
+        response = client.post(
+            "/internal/deliver",
+            content=b"",
+            headers={"X-Nabaa-Timestamp": timestamp, "X-Nabaa-Signature": signature},
+        )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["sent"] == 0
+    assert payload["failed"] == 1
+    assert "bot was blocked by the user" in next(iter(payload["reasons"]))

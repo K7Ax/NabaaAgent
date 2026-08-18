@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import html
 import time
+from collections import Counter
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
@@ -317,7 +318,7 @@ async def reserve_quota(request: Request) -> dict[str, bool]:
 
 
 @app.post("/internal/deliver")
-async def deliver(request: Request) -> dict[str, int]:
+async def deliver(request: Request) -> dict[str, object]:
     raw = await request.body()
     _verify_internal_request(request, raw)
     state = _state(request)
@@ -327,7 +328,17 @@ async def deliver(request: Request) -> dict[str, int]:
         state.repository.due_deliveries,
         state.settings.delivery_batch_size,
     )
-    sent = failed = 0
+    sent = 0
+    # Counting *why* deliveries fail, not just how many. A queue that quietly fails
+    # forever is indistinguishable from an idle one in the metrics, and the reason
+    # (a dead application page vs. Telegram refusing the chat) points at very
+    # different fixes.
+    failures: Counter[str] = Counter()
+
+    async def fail(queue_id: int, error: str) -> None:
+        failures[error[:120]] += 1
+        await asyncio.to_thread(state.repository.fail_delivery, queue_id, error)
+
     checked: dict[str, str] = {}
     candidates_by_id = {
         str(row["opportunity_id"]): OpportunityCandidate.model_validate_json(row["payload"])
@@ -394,12 +405,7 @@ async def deliver(request: Request) -> dict[str, int]:
         if validation_state == "closed":
             continue
         if validation_state != "open":
-            await asyncio.to_thread(
-                state.repository.fail_delivery,
-                row["id"],
-                "application page unavailable",
-            )
-            failed += 1
+            await fail(row["id"], "application page unavailable")
             continue
         try:
             from opportunity_sentinel.telegram_bot import opportunity_keyboard, opportunity_text
@@ -418,12 +424,7 @@ async def deliver(request: Request) -> dict[str, int]:
             )
             sent += 1
         except Exception as exc:
-            await asyncio.to_thread(
-                state.repository.fail_delivery,
-                row["id"],
-                f"{type(exc).__name__}: {exc}",
-            )
-            failed += 1
+            await fail(row["id"], f"{type(exc).__name__}: {exc}")
     for telegram_id, items in digest_groups.items():
         valid: list[tuple[object, OpportunityCandidate]] = []
         for row in items[:10]:
@@ -444,12 +445,7 @@ async def deliver(request: Request) -> dict[str, int]:
             if validation_state == "open":
                 valid.append((row, candidate))
             elif validation_state == "unavailable":
-                await asyncio.to_thread(
-                    state.repository.fail_delivery,
-                    row["id"],
-                    "application page unavailable",
-                )
-                failed += 1
+                await fail(row["id"], "application page unavailable")
         if not valid:
             continue
         lines = ["🌙 <b>ملخص فرصك اليومي</b>", ""]
@@ -472,13 +468,11 @@ async def deliver(request: Request) -> dict[str, int]:
             sent += len(valid)
         except Exception as exc:
             for row, _ in valid:
-                await asyncio.to_thread(
-                    state.repository.fail_delivery,
-                    row["id"],
-                    f"{type(exc).__name__}: {exc}",
-                )
-            failed += len(valid)
-    return {"sent": sent, "failed": failed}
+                await fail(row["id"], f"{type(exc).__name__}: {exc}")
+    failed = sum(failures.values())
+    if failed:
+        logger.warning("delivery_failed", failed=failed, reasons=dict(failures))
+    return {"sent": sent, "failed": failed, "reasons": dict(failures)}
 
 
 @app.get("/internal/metrics")
