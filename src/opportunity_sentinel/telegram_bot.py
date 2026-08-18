@@ -18,7 +18,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from langgraph.types import Command
 
 from opportunity_sentinel.agents import DiscoveryAgent, VerificationAgent
-from opportunity_sentinel.config import Settings, get_settings
+from opportunity_sentinel.config import Settings, configure_tracing, get_settings
 from opportunity_sentinel.llm import build_model_router
 from opportunity_sentinel.logging import configure_logging, logger
 from opportunity_sentinel.models import OpportunityCandidate, OpportunityType, StudentProfile
@@ -1065,6 +1065,7 @@ async def run_bot() -> None:
     if not settings.groq_api_key and not settings.openrouter_api_key:
         raise RuntimeError("GROQ_API_KEY or OPENROUTER_API_KEY is required in .env")
     configure_logging(settings.log_level)
+    logger.info("langsmith_tracing", enabled=configure_tracing(settings))
     runtime = create_runtime(settings)
     bot = Bot(
         settings.telegram_bot_token,

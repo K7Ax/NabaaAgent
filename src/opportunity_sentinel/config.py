@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -44,6 +45,12 @@ class Settings(BaseSettings):
     telegram_webhook_secret: str | None = None
     internal_api_secret: str | None = None
     tavily_monthly_credit_limit: int = Field(default=900, ge=0, le=1000)
+    # LangSmith. These are read from .env like everything else, then exported to the
+    # process environment by configure_tracing() because the tracing client reads
+    # os.environ directly rather than this settings object.
+    langchain_tracing_v2: bool = False
+    langchain_api_key: str | None = None
+    langchain_project: str = "nabaa-capstone"
     digest_hour_riyadh: int = Field(default=18, ge=0, le=23)
     delivery_batch_size: int = Field(default=10, ge=1, le=100)
 
@@ -51,3 +58,18 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def configure_tracing(settings: Settings | None = None) -> bool:
+    """Export LangSmith settings to the process environment.
+
+    Returns whether tracing is actually on. The tracing client reads ``os.environ``, so
+    values that arrive through ``.env`` have to be published there explicitly.
+    """
+    settings = settings or get_settings()
+    if not (settings.langchain_tracing_v2 and settings.langchain_api_key):
+        return False
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    os.environ["LANGCHAIN_API_KEY"] = settings.langchain_api_key
+    os.environ["LANGCHAIN_PROJECT"] = settings.langchain_project
+    return True

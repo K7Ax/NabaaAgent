@@ -45,6 +45,21 @@ Copy-Item .env.example .env    # then fill in your keys
 Restart the kernel and run all cells top to bottom. Cells needing live API keys are
 marked and skip gracefully when a key is absent.
 
+### Tracing runs with LangSmith
+
+Set these three variables in `.env` (a free account at
+[smith.langchain.com](https://smith.langchain.com) is enough) and every workflow
+run, task retry and model call is traced automatically:
+
+```
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=lsv2_...
+LANGCHAIN_PROJECT=nabaa-capstone
+```
+
+What the traces showed, and what changed because of them, is written up in
+[`docs/capstone-writeup.md`](docs/capstone-writeup.md).
+
 نبأ منصة Telegram عربية تكتشف فرص الطلاب مركزيًا، تتحقق من رابط التقديم والأدلة،
 ثم تطابق الفرصة برمجيًا مع ملف كل طالب. تبدأ المنصة بجامعة الملك سعود، وتدعم
 طلاب الجامعات الأخرى والفرص المتاحة في السعودية أو عن بُعد.
