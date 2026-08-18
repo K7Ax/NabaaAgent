@@ -10,7 +10,6 @@ from typing import Any
 
 from opportunity_sentinel.repository import Repository
 
-
 TABLES: tuple[str, ...] = (
     "students",
     "opportunities",

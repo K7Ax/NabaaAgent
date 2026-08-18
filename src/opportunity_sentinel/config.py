@@ -23,6 +23,15 @@ class Settings(BaseSettings):
     tavily_api_key: str | None = None
     groq_model: str = "openai/gpt-oss-20b"
     openrouter_model: str = "openrouter/free"
+    # The agentic pipeline needs models that reliably support native tool calling
+    # and json_schema responses, so it pins its own models instead of reusing the
+    # batch collector's. "openrouter/free" is a wildcard route and cannot make
+    # either guarantee.
+    agent_groq_model: str = "openai/gpt-oss-120b"
+    agent_openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"
+    memory_db_path: Path = Path("student_memory.sqlite")
+    knowledge_dir: Path = Path("docs/knowledge")
+    rag_top_k: int = Field(default=4, ge=1, le=20)
     search_max_results: int = Field(default=5, ge=1, le=20)
     request_timeout_seconds: float = Field(default=20, ge=3, le=60)
     notification_interval_minutes: int = Field(default=480, ge=15, le=1440)
