@@ -224,3 +224,56 @@ def test_the_supervisor_decides_the_route_for_each_message(
 
     assert supervisor.seen == ["ودي أطور نفسي"]
     assert result["route"] == "find_courses_bootcamps"
+
+
+def test_knowledge_questions_are_answered_from_the_corpus_not_a_search(
+    tmp_path: Path, verified_page: SourcePage
+) -> None:
+    """The supervisor routes a question to RAG, and discovery never runs."""
+    from opportunity_sentinel.rag import GroundedAnswer
+
+    class StubAnswerer:
+        def __init__(self) -> None:
+            self.asked: list[str] = []
+
+        def answer(self, question: str) -> GroundedAnswer:
+            self.asked.append(question)
+            return GroundedAnswer(
+                answer="نعم، معسكرات طويق مجانية.",
+                citations=["tuwaiq-faq"],
+                supported=True,
+            )
+
+    answerer = StubAnswerer()
+    tools = InMemoryResearchTools([verified_page])
+    workflow = build_workflow(
+        DiscoveryAgent(tools),
+        VerificationAgent(),
+        tmp_path / "checkpoints.sqlite",
+        store=InMemoryStore(),
+        supervisor=StubSupervisor(RouteDecision(route="ask_knowledge")),
+        knowledge_answerer=answerer,
+    )
+
+    result = workflow.invoke(
+        {"thread_id": "kb-1", "message": "هل معسكرات طويق مجانية؟"},
+        config=thread_config("kb-1"),
+    )
+
+    assert result["final_status"] == "answered"
+    assert result["answer"]["supported"] is True
+    assert result["answer"]["citations"] == ["tuwaiq-faq"]
+    assert answerer.asked == ["هل معسكرات طويق مجانية؟"]
+    assert result["observations"] == []  # no search was performed
+
+
+def test_a_knowledge_question_without_a_corpus_says_so(tmp_path: Path) -> None:
+    workflow, _ = _workflow(
+        tmp_path, [], supervisor=StubSupervisor(RouteDecision(route="ask_knowledge"))
+    )
+
+    result = workflow.invoke(
+        {"thread_id": "kb-2", "message": "سؤال"}, config=thread_config("kb-2")
+    )
+
+    assert result["answer"]["supported"] is False

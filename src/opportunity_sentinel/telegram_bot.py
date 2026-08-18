@@ -140,14 +140,17 @@ def create_runtime(
     )
     supervisor = None
     chat_model = None
+    knowledge_answerer = None
     if settings.groq_api_key or settings.openrouter_api_key:
         # The agentic layer needs a chat model. Without a key the bot still runs: the
         # workflow falls back to the deterministic collector and the caller's query.
         from opportunity_sentinel.chat_models import build_chat_model
+        from opportunity_sentinel.rag import LazyKnowledgeAnswerer
         from opportunity_sentinel.supervisor import Supervisor
 
         supervisor = Supervisor.from_settings(settings)
         chat_model = build_chat_model(settings)
+        knowledge_answerer = LazyKnowledgeAnswerer(settings, repository)
     store = build_store(settings.memory_db_path)
     workflow = build_workflow(
         DiscoveryAgent(tools, llm),
@@ -157,6 +160,7 @@ def create_runtime(
         max_research_attempts=settings.max_research_attempts,
         supervisor=supervisor,
         chat_model=chat_model,
+        knowledge_answerer=knowledge_answerer,
     )
     return BotRuntime(settings, repository, workflow)
 

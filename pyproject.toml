@@ -14,8 +14,11 @@ dependencies = [
   "ddgs>=9.5,<10",
   "fastapi>=0.116,<1",
   "httpx>=0.28,<1",
+  "langchain>=1.0,<2",
+  "langchain-community>=0.3,<1",
   "langchain-groq>=0.3,<1",
   "langchain-openai>=0.3,<1",
+  "langchain-text-splitters>=0.3,<1",
   "langgraph>=1.0,<2",
   "langgraph-checkpoint-sqlite>=3.0,<4",
   "langsmith>=0.4,<1",
@@ -28,19 +31,19 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "faiss-cpu>=1.9,<2",
   "pytest>=8.4,<9",
   "pytest-cov>=6.2,<7",
   "pytest-asyncio>=1.1,<2",
   "ruff>=0.12,<1",
 ]
-# Retrieval stack for the capstone notebook. Kept out of the runtime image so the
-# free-tier deployment never installs torch.
+# Local embeddings for the capstone notebook. Kept out of the runtime and CI installs so
+# neither the free-tier deployment nor the test job ever downloads torch: the tests
+# substitute a deterministic lexical embedding and exercise the same code path.
 capstone = [
   "faiss-cpu>=1.9,<2",
   "jupyterlab>=4.2,<5",
-  "langchain-community>=0.3,<1",
   "langchain-huggingface>=0.3,<1",
-  "langchain-text-splitters>=0.3,<1",
   "sentence-transformers>=3.0,<6",
 ]
 

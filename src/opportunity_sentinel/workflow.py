@@ -14,10 +14,18 @@ Shape of a run:
    gaps and discovery runs again, bounded by ``max_research_attempts``.
 5. Anything still unverified pauses at ``interrupt()`` for a human decision.
 
-Error handling uses two named strategies. Transient failures are retried by real
-``RetryPolicy`` objects declared per task, and provider outages are absorbed by the
-``.with_fallbacks()`` chain in :mod:`opportunity_sentinel.chat_models`. Long searches are
-additionally bounded by a task ``timeout``.
+Error handling uses three named strategies:
+
+1. **Retry with exponential backoff** — real ``RetryPolicy`` objects declared per task,
+   with a predicate that retries connection blips and 429/5xx but never a 4xx we caused.
+2. **Provider fallback** — outages are absorbed by the ``.with_fallbacks()`` chain in
+   :mod:`opportunity_sentinel.chat_models`, and a free model that ends its turn without
+   calling a tool falls back to the deterministic collector.
+3. **Fail closed** — a page carrying a prompt-injection payload is dropped rather than
+   trusted, and anything that cannot be verified automatically stops for a human.
+
+Individual network calls are bounded by the HTTP client timeout in the research tools;
+LangGraph only supports task-level timeouts on async tasks, and this pipeline is sync.
 
 Because the entrypoint body replays from the top when a run resumes, every side effect
 lives inside a ``@task``: completed tasks are served from the checkpoint instead of being
@@ -113,7 +121,7 @@ def build_workflow(
             ).model_dump(mode="json")
         return supervisor.classify(message).model_dump(mode="json")
 
-    @task(retry_policy=NETWORK_RETRY, timeout=120)
+    @task(retry_policy=NETWORK_RETRY)
     def discover(query: str, attempt: int, refining: bool) -> dict[str, Any]:
         """Gather candidate pages, letting the model drive when a chat model exists."""
         pages: list[dict[str, Any]] = []

@@ -843,6 +843,15 @@ class Repository:
         self.connection.commit()
         return count
 
+    def list_verified_candidates(self, limit: int = 200) -> list[OpportunityCandidate]:
+        """Return verified opportunities, newest first, for the retrieval corpus."""
+        rows = self.connection.execute(
+            """SELECT payload FROM opportunities WHERE status='verified'
+               ORDER BY last_verified_at DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [OpportunityCandidate.model_validate_json(row["payload"]) for row in rows]
+
     def recompute_matches_for_profile(self, profile: StudentProfile) -> None:
         rows = self.connection.execute(
             "SELECT id,payload FROM opportunities WHERE status='verified'"

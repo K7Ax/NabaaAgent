@@ -135,13 +135,13 @@ def run_discovery_agent(
     The caller is responsible for falling back to the deterministic collector when this
     returns no pages: free-tier models occasionally end a turn without calling any tool.
     """
-    from langgraph.prebuilt import create_react_agent
+    from langchain.agents import create_agent
 
     collector = PageCollector()
-    agent = create_react_agent(
+    agent = create_agent(
         chat_model,
         tools=build_tools(tools, collector),
-        prompt=DISCOVERY_SYSTEM_PROMPT,
+        system_prompt=DISCOVERY_SYSTEM_PROMPT,
     )
     result = agent.invoke(
         {"messages": [("human", query)]},
