@@ -2,6 +2,49 @@
 
 [![Quality Gate](https://github.com/K7Ax/NabaaAgent/actions/workflows/quality.yml/badge.svg)](https://github.com/K7Ax/NabaaAgent/actions/workflows/quality.yml)
 
+## Capstone Submission
+
+| | |
+|---|---|
+| **Student** | Khalid Al-Zahem |
+| **Programme** | SDAIA Academy — Agentic AI Systems, Aug 2026 |
+| **Declared track** | **Track A** |
+| **Academy** | [SDAIA Academy on GitHub](https://github.com/SDAIAAcademy) |
+| **Capstone notebook** | [`capstone.ipynb`](capstone.ipynb) — every rubric section demonstrated with captured output |
+| **Section write-up** | [`docs/capstone-writeup.md`](docs/capstone-writeup.md) |
+| **Rubric map** | [`docs/rubric-map.md`](docs/rubric-map.md) — each rubric section → file, test, notebook cell |
+
+This project was completed under the **SDAIA Academy — Agentic AI Systems** training
+programme (cohort: August 2026).
+
+### What this project is (English summary)
+
+**Nabaa (نبأ)** is an Arabic Telegram platform that centrally discovers student
+opportunities in Saudi Arabia — bootcamps, scholarships, internships, graduate
+programmes, hackathons and events — then *verifies* each one (re-opening the
+application page and requiring first-party evidence) before deterministically
+matching it against each student's profile. It starts with King Saud University
+and supports other universities plus remote-friendly opportunities.
+
+The agentic pipeline is built with the **LangGraph Functional API**
+(`@task` / `@entrypoint`): an LLM supervisor classifies each request with
+structured output and routes it to agentic discovery (a tool-calling ReAct agent),
+a retrieval-augmented knowledge answerer, or long-term memory updates. Verification
+runs as an **Evaluator-Optimizer** loop, and anything ambiguous pauses for human
+approval via `interrupt()`.
+
+### Running the capstone notebook
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python -m pip install -e ".[dev,capstone]"
+Copy-Item .env.example .env    # then fill in your keys
+.venv\Scripts\python -m jupyter lab capstone.ipynb
+```
+
+Restart the kernel and run all cells top to bottom. Cells needing live API keys are
+marked and skip gracefully when a key is absent.
+
 نبأ منصة Telegram عربية تكتشف فرص الطلاب مركزيًا، تتحقق من رابط التقديم والأدلة،
 ثم تطابق الفرصة برمجيًا مع ملف كل طالب. تبدأ المنصة بجامعة الملك سعود، وتدعم
 طلاب الجامعات الأخرى والفرص المتاحة في السعودية أو عن بُعد.
@@ -32,7 +75,7 @@ flowchart LR
     O["مصادر رسمية وواجهات عامة"] --> C["جامع مركزي محلي أو في GitHub Actions"]
     X["بحث وإشارات مفهرسة"] --> C
     C --> V["تحقق حتمي + LangGraph عند الغموض"]
-    V -->|"دفعة موقعة"| A["FastAPI على Railway"]
+    V -->|"دفعة موقعة"| A["FastAPI على Render"]
     A --> D[("SQLite WAL")]
     D --> M["محرك المطابقة"]
     M --> Q["طابور فوري + يومي"]
@@ -94,8 +137,8 @@ TAVILY_MONTHLY_CREDIT_LIMIT=900
 
 أضف إلى Repository Secrets:
 
-- `NABAA_API_URL`: رابط خدمة Railway.
-- `INTERNAL_API_SECRET`: نفس القيمة الموجودة في Railway.
+- `NABAA_API_URL`: رابط خدمة Render.
+- `INTERNAL_API_SECRET`: نفس القيمة الموجودة في Render.
 - `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `TAVILY_API_KEY`.
 
 Workflow المسمى `Central Opportunity Discovery` يعمل تلقائيًا فقط بعد وجود
@@ -156,7 +199,7 @@ Workflow `Production Keepalive` لا يفعل شيئًا حتى يُضبط `NABA
 ## حدود صريحة
 
 لا توجد وسيلة قانونية أو تقنية تضمن اكتشاف كل إعلان في الإنترنت. نبأ يقيس تغطية
-قائمة مصادر معلنة ويستخدم البحث لسد الفجوات. Railway Free ومزودو النماذج المجانية
+قائمة مصادر معلنة ويستخدم البحث لسد الفجوات. Render Free ومزودو النماذج المجانية
 لا يقدمون ضمان توفر؛ عند وصول الاستخدام إلى الحد يتوقف البحث العميق بأمان، بينما
 تبقى البيانات وقواعد التوثيق دون تخفيض.
 

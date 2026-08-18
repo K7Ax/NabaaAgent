@@ -1,11 +1,11 @@
-# إعداد Telegram وRailway
+# إعداد Telegram وRender
 
 ## إنشاء البوت والمشرف
 
 1. أنشئ البوت من الحساب الموثق `@BotFather` واحفظ token في مكان آمن.
 2. أرسل رسالة للبوت، ثم استخرج رقم حساب المشرف مرة واحدة عبر `getUpdates` قبل
    تسجيل Webhook.
-3. خزّن القيمتين في Railway باسم `TELEGRAM_BOT_TOKEN` و`TELEGRAM_ADMIN_CHAT_ID`.
+3. خزّن القيمتين في Render باسم `TELEGRAM_BOT_TOKEN` و`TELEGRAM_ADMIN_CHAT_ID`.
 4. لا تضع token في Git أو صورة أو سجل تشغيل.
 
 ## Webhook الإنتاجي
@@ -13,7 +13,7 @@
 أنشئ قيمتين عشوائيتين مختلفتين وطويلتين:
 
 ```dotenv
-PUBLIC_BASE_URL=https://YOUR-SERVICE.up.railway.app
+PUBLIC_BASE_URL=https://YOUR-SERVICE.onrender.com
 TELEGRAM_WEBHOOK_SECRET=...
 INTERNAL_API_SECRET=...
 ```
