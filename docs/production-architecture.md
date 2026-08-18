@@ -56,5 +56,24 @@ content; deterministic structured adapters do not invoke an LLM.
 - `/internal/deliver`: throttled immediate and digest delivery.
 - `/internal/metrics`: protected platform counters.
 
-If an official application page is unreachable, delivery remains pending for retry. If
-the page is closed, the opportunity expires and all pending deliveries are cancelled.
+### The send-time re-check
+
+Every queued match is re-checked against its official application page immediately
+before it is sent, and the outcome is one of three things:
+
+| Outcome | Meaning | What happens |
+|---|---|---|
+| `closed` | the page itself says registration has ended | the row is cancelled and the opportunity expires |
+| `open` | the page itself says applications are accepted | sent as-is |
+| `unverified` | no evidence either way | sent with a line asking the student to confirm the link, unless the verified deadline has passed |
+
+The third row is the important one. `unverified` covers both "the host refused the
+request" and "the page loaded but says nothing either way", and neither is evidence
+that the opportunity is gone. Treating it as closure is not a conservative choice — it
+withholds everything: `tuwaiq.edu.sa` answers 403 to any non-browser client, so for as
+long as that outcome blocked delivery the service verified opportunities and sent
+students none of them.
+
+A send that fails for a transient reason is retried; after five attempts the row is
+parked as `failed` with its last error, so the pending count reflects work that can
+still succeed rather than accumulating rows nobody will ever receive.
