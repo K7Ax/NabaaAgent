@@ -8,6 +8,7 @@ import time
 from collections import Counter
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import date
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -243,7 +244,7 @@ async def revalidate(request: Request) -> dict[str, int]:
     state = _state(request)
     run_id = await asyncio.to_thread(state.repository.start_crawl, "revalidation")
     expired = await asyncio.to_thread(state.repository.expire_stale)
-    checked = opened = unavailable = 0
+    checked = opened = unverified = 0
     try:
         due = await asyncio.to_thread(
             state.repository.due_revalidation,
@@ -270,10 +271,10 @@ async def revalidate(request: Request) -> dict[str, int]:
                 await asyncio.to_thread(
                     state.repository.record_revalidation,
                     identifier,
-                    "unavailable",
+                    "unverified",
                     error,
                 )
-                unavailable += 1
+                unverified += 1
                 continue
             assert result is not None
             await asyncio.to_thread(
@@ -287,7 +288,7 @@ async def revalidate(request: Request) -> dict[str, int]:
             elif result.state == "open":
                 opened += 1
             else:
-                unavailable += 1
+                unverified += 1
         await asyncio.to_thread(state.repository.finish_crawl, run_id, checked, opened)
     except Exception as exc:
         await asyncio.to_thread(
@@ -298,7 +299,7 @@ async def revalidate(request: Request) -> dict[str, int]:
             f"{type(exc).__name__}: {exc}",
         )
         raise
-    return {"open": opened, "expired": expired, "unavailable": unavailable}
+    return {"open": opened, "expired": expired, "unverified": unverified}
 
 
 @app.post("/internal/quota/reserve")
@@ -339,6 +340,30 @@ async def deliver(request: Request) -> dict[str, object]:
         failures[error[:120]] += 1
         await asyncio.to_thread(state.repository.fail_delivery, queue_id, error)
 
+    async def cancel(queue_id: int, reason: str) -> None:
+        await asyncio.to_thread(state.repository.cancel_delivery, queue_id, reason)
+
+    def withheld_because(candidate: OpportunityCandidate, validation: str) -> str | None:
+        """Why this match must not be sent, or None when it may go out.
+
+        Re-opening the page at send time protects the student from a dead link, but only
+        *positive* evidence of closure is a reason to withhold. Treating "the host
+        refused our request" as closure withheld every match this service ever queued:
+        tuwaiq.edu.sa answers 403 to any non-browser client, so nothing was deliverable.
+        When the check proves nothing either way, the opportunity's own verified
+        deadline is the remaining guard.
+        """
+        if validation == "closed":
+            return "الفرصة أُغلقت"
+        if validation != "open" and candidate.deadline and candidate.deadline < date.today():
+            return "انتهى الموعد النهائي دون تأكيد فتح التسجيل"
+        return None
+
+    caveat = (
+        "\n\n⚠️ لم نتمكن من إعادة تأكيد فتح التسجيل "
+        "الآن، تحقق من الرابط قبل التقديم."
+    )
+
     checked: dict[str, str] = {}
     candidates_by_id = {
         str(row["opportunity_id"]): OpportunityCandidate.model_validate_json(row["payload"])
@@ -366,11 +391,11 @@ async def deliver(request: Request) -> dict[str, object]:
     )
     for opportunity_id, validation, error in validation_results:
         if error:
-            checked[opportunity_id] = "unavailable"
+            checked[opportunity_id] = "unverified"
             await asyncio.to_thread(
                 state.repository.record_revalidation,
                 opportunity_id,
-                "unavailable",
+                "unverified",
                 error,
             )
             continue
@@ -402,17 +427,19 @@ async def deliver(request: Request) -> dict[str, object]:
             )
             continue
         validation_state = checked[row["opportunity_id"]]
-        if validation_state == "closed":
-            continue
-        if validation_state != "open":
-            await fail(row["id"], "application page unavailable")
+        withheld = withheld_because(candidate, validation_state)
+        if withheld:
+            await cancel(row["id"], withheld)
             continue
         try:
             from opportunity_sentinel.telegram_bot import opportunity_keyboard, opportunity_text
 
+            body = f"🔔 فرصة مطابقة لملفك — {row['score']}/100\n\n" + opportunity_text(
+                candidate
+            )
             await state.bot.send_message(
                 row["telegram_id"],
-                f"🔔 فرصة مطابقة لملفك — {row['score']}/100\n\n" + opportunity_text(candidate),
+                body if validation_state == "open" else body + caveat,
                 reply_markup=opportunity_keyboard(row["opportunity_id"], candidate),
                 disable_web_page_preview=True,
             )
@@ -442,10 +469,11 @@ async def deliver(request: Request) -> dict[str, object]:
                 )
                 continue
             validation_state = checked[row["opportunity_id"]]
-            if validation_state == "open":
+            withheld = withheld_because(candidate, validation_state)
+            if withheld:
+                await cancel(row["id"], withheld)
+            else:
                 valid.append((row, candidate))
-            elif validation_state == "unavailable":
-                await fail(row["id"], "application page unavailable")
         if not valid:
             continue
         lines = ["🌙 <b>ملخص فرصك اليومي</b>", ""]

@@ -268,7 +268,7 @@ def test_monthly_quota_fails_closed(tmp_path: Path) -> None:
     assert repository.consume_quota("tavily", 2, 3) is False
 
 
-def test_revalidation_open_closed_and_unavailable(monkeypatch) -> None:
+def test_revalidation_open_closed_and_unverified(monkeypatch) -> None:
     import opportunity_sentinel.revalidation as module
 
     candidate = _candidate()
@@ -284,7 +284,7 @@ def test_revalidation_open_closed_and_unavailable(monkeypatch) -> None:
 
     monkeypatch.setattr(module, "WebResearchTools", FakeTools)
     FakeTools.page = None
-    assert module.revalidate_application(candidate).state == "unavailable"
+    assert module.revalidate_application(candidate).state == "unverified"
     FakeTools.page = SourcePage(
         url=str(candidate.application_url),
         title="Closed",
@@ -305,7 +305,7 @@ def test_revalidation_open_closed_and_unavailable(monkeypatch) -> None:
         content="نبذة عامة عن البرنامج",
         official=True,
     )
-    assert module.revalidate_application(candidate).state == "unavailable"
+    assert module.revalidate_application(candidate).state == "unverified"
 
 
 def test_review_queue_source_health_and_revalidation_state(tmp_path: Path) -> None:
@@ -454,3 +454,139 @@ def test_delivery_reports_why_each_message_failed(tmp_path: Path, monkeypatch) -
     assert payload["sent"] == 0
     assert payload["failed"] == 1
     assert "bot was blocked by the user" in next(iter(payload["reasons"]))
+
+
+def _seed_one_match(settings: Settings) -> None:
+    seed = Repository(settings.data_db_path)
+    seed.upsert_profile(
+        StudentProfile(
+            telegram_id=7,
+            major="هندسة البرمجيات",
+            graduation_year=2027,
+            preferred_types={OpportunityType.INTERNSHIP},
+        )
+    )
+    seed.save_opportunity(_candidate(), 1.0)
+    assert seed.due_deliveries()
+    seed.connection.close()
+
+
+def _deliver(api_module, settings: Settings, secret: str, bot: object):
+    timestamp = str(int(time.time()))
+    signature = hmac.new(
+        secret.encode(), timestamp.encode() + b".", hashlib.sha256
+    ).hexdigest()
+    with TestClient(api_module.app) as client:
+        api_module.app.state.service.bot = bot
+        return client.post(
+            "/internal/deliver",
+            content=b"",
+            headers={"X-Nabaa-Timestamp": timestamp, "X-Nabaa-Signature": signature},
+        )
+
+
+class _RecordingBot:
+    session = SimpleNamespace(close=_noop)
+
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    async def send_message(self, _: int, text: str, **kwargs: object) -> None:
+        self.messages.append(text)
+
+
+def test_an_unverifiable_page_still_delivers_with_a_caveat(tmp_path: Path, monkeypatch) -> None:
+    """The re-check proving nothing is not the same as the opportunity being gone.
+
+    tuwaiq.edu.sa answers 403 to any non-browser client, so every re-check came back
+    "unverified" and the fail-closed gate withheld all nineteen queued matches. The
+    student got silence about opportunities the pipeline had already verified.
+    """
+    import opportunity_sentinel.api as api_module
+    from opportunity_sentinel.revalidation import RevalidationResult
+
+    secret = "test-internal-secret"
+    settings = Settings(
+        data_db_path=tmp_path / "caveat.sqlite",
+        checkpoint_db_path=tmp_path / "caveat-checkpoints.sqlite",
+        internal_api_secret=secret,
+        telegram_bot_token=None,
+    )
+    monkeypatch.setattr(api_module, "get_settings", lambda: settings)
+    _seed_one_match(settings)
+    monkeypatch.setattr(
+        api_module,
+        "revalidate_application",
+        lambda candidate, timeout: RevalidationResult("unverified", "403 Forbidden"),
+    )
+    bot = _RecordingBot()
+
+    response = _deliver(api_module, settings, secret, bot)
+
+    assert response.json() == {"sent": 1, "failed": 0, "reasons": {}}
+    assert len(bot.messages) == 1
+    assert "تحقق من الرابط قبل التقديم" in bot.messages[0]
+
+
+def test_a_closed_page_is_cancelled_rather_than_retried_forever(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Positive evidence of closure is the one case worth withholding on.
+
+    The row is retired instead of left pending, because leaving it pending means
+    re-fetching a dead page on every run for the rest of the service's life.
+    """
+    import opportunity_sentinel.api as api_module
+    from opportunity_sentinel.revalidation import RevalidationResult
+
+    secret = "test-internal-secret"
+    settings = Settings(
+        data_db_path=tmp_path / "closed.sqlite",
+        checkpoint_db_path=tmp_path / "closed-checkpoints.sqlite",
+        internal_api_secret=secret,
+        telegram_bot_token=None,
+    )
+    monkeypatch.setattr(api_module, "get_settings", lambda: settings)
+    _seed_one_match(settings)
+    monkeypatch.setattr(
+        api_module,
+        "revalidate_application",
+        lambda candidate, timeout: RevalidationResult("closed", "registration closed"),
+    )
+    bot = _RecordingBot()
+
+    response = _deliver(api_module, settings, secret, bot)
+
+    assert response.json() == {"sent": 0, "failed": 0, "reasons": {}}
+    assert bot.messages == []
+    after = Repository(settings.data_db_path)
+    assert after.due_deliveries() == []
+    assert after.metrics()["pending_deliveries"] == 0
+    after.connection.close()
+
+
+def test_a_delivery_stops_retrying_once_the_cause_is_clearly_permanent(tmp_path: Path) -> None:
+    """Nineteen rows retried on every run for weeks without anyone noticing."""
+    from opportunity_sentinel.repository import MAX_DELIVERY_ATTEMPTS
+
+    repository = Repository(tmp_path / "deadletter.sqlite")
+    repository.upsert_profile(
+        StudentProfile(
+            telegram_id=7,
+            major="هندسة البرمجيات",
+            graduation_year=2027,
+            preferred_types={OpportunityType.INTERNSHIP},
+        )
+    )
+    repository.save_opportunity(_candidate(), 1.0)
+    queue_id = repository.due_deliveries()[0]["id"]
+
+    for _ in range(MAX_DELIVERY_ATTEMPTS - 1):
+        repository.fail_delivery(queue_id, "TelegramNetworkError: timed out")
+        assert repository.due_deliveries(), "a transient failure must stay retryable"
+
+    repository.fail_delivery(queue_id, "TelegramNetworkError: timed out")
+
+    assert repository.due_deliveries() == []
+    assert repository.metrics()["pending_deliveries"] == 0
+    repository.connection.close()

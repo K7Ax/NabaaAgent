@@ -17,6 +17,9 @@ from opportunity_sentinel.models import (
 )
 from opportunity_sentinel.taxonomy import KSU_TAXONOMY, KSU_TAXONOMY_VERSION
 
+# Past this many failed sends the cause is not transient and retrying is just noise.
+MAX_DELIVERY_ATTEMPTS = 5
+
 
 class DatabaseRow:
     """Small sqlite3.Row-compatible value used by the remote libSQL driver."""
@@ -956,9 +959,27 @@ class Repository:
         self.connection.commit()
 
     def fail_delivery(self, queue_id: int, error: str) -> None:
+        """Record a failed attempt, and stop retrying once it is clearly not transient.
+
+        A row that stays ``pending`` forever is retried on every run and keeps inflating
+        the pending count, which is how nineteen undeliverable matches hid in plain
+        sight. After ``MAX_DELIVERY_ATTEMPTS`` the row is parked as ``failed`` with the
+        last error still attached, so it can be inspected rather than silently retried.
+        """
         self.connection.execute(
-            "UPDATE delivery_queue SET attempts=attempts+1,last_error=? WHERE id=?",
-            (error[:500], queue_id),
+            """UPDATE delivery_queue
+               SET attempts=attempts+1,last_error=?,
+                   status=CASE WHEN attempts+1>=? THEN 'failed' ELSE status END
+               WHERE id=?""",
+            (error[:500], MAX_DELIVERY_ATTEMPTS, queue_id),
+        )
+        self.connection.commit()
+
+    def cancel_delivery(self, queue_id: int, reason: str) -> None:
+        """Retire a queue row that should never be sent — a closed or expired offer."""
+        self.connection.execute(
+            "UPDATE delivery_queue SET status='cancelled',last_error=? WHERE id=?",
+            (reason[:500], queue_id),
         )
         self.connection.commit()
 

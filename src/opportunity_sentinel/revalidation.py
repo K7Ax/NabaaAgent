@@ -15,11 +15,23 @@ class RevalidationResult:
 def revalidate_application(
     candidate: OpportunityCandidate, timeout: float = 20
 ) -> RevalidationResult:
-    """Reopen the application page and fail closed on outages or closure text."""
+    """Reopen the application page and report what it proves.
+
+    Three outcomes, and the difference between the last two matters:
+
+    * ``closed`` — the page itself says registration has ended. Positive evidence.
+    * ``open`` — the page itself says applications are being accepted. Positive evidence.
+    * ``unverified`` — no evidence either way, because the host refused the request
+      (tuwaiq.edu.sa answers 403 to anything that is not a browser) or because the page
+      loaded but its wording matches none of the markers. This is the absence of a
+      signal, **not** proof that the opportunity is gone, and callers must not treat it
+      as such: every delivery used to be blocked on it, so the bot verified 148
+      opportunities and sent students none of them.
+    """
     tools = WebResearchTools(max_results=1, timeout=timeout)
     page, observation = tools.open_page(str(candidate.application_url))
     if not page:
-        return RevalidationResult("unavailable", observation.detail)
+        return RevalidationResult("unverified", observation.detail)
     content = page.content.casefold()
     closed_markers = {
         "registration closed",
@@ -48,6 +60,6 @@ def revalidate_application(
     if any(marker in content for marker in open_markers):
         return RevalidationResult("open", "official application page proves applications are open")
     return RevalidationResult(
-        "unavailable",
+        "unverified",
         "application page is reachable but no current open-registration evidence was found",
     )
