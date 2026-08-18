@@ -19,13 +19,13 @@ from langgraph.types import Command
 
 from opportunity_sentinel.agents import DiscoveryAgent, VerificationAgent
 from opportunity_sentinel.config import Settings, get_settings
-from opportunity_sentinel.graph import build_graph, thread_config
 from opportunity_sentinel.llm import build_model_router
 from opportunity_sentinel.logging import configure_logging, logger
 from opportunity_sentinel.models import OpportunityCandidate, OpportunityType, StudentProfile
 from opportunity_sentinel.repository import Repository
 from opportunity_sentinel.taxonomy import KSU_TAXONOMY
 from opportunity_sentinel.tools import WebResearchTools
+from opportunity_sentinel.workflow import build_store, build_workflow, thread_config
 
 MAJORS = {
     "software": "هندسة البرمجيات",
@@ -107,7 +107,7 @@ class PendingProfile:
 class BotRuntime:
     settings: Settings
     repository: Repository
-    graph: object
+    workflow: object
     pending: dict[int, PendingProfile] = field(default_factory=dict)
     collection_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     last_heartbeat_at: datetime | None = None
@@ -138,13 +138,27 @@ def create_runtime(
             )
         ),
     )
-    graph = build_graph(
+    supervisor = None
+    chat_model = None
+    if settings.groq_api_key or settings.openrouter_api_key:
+        # The agentic layer needs a chat model. Without a key the bot still runs: the
+        # workflow falls back to the deterministic collector and the caller's query.
+        from opportunity_sentinel.chat_models import build_chat_model
+        from opportunity_sentinel.supervisor import Supervisor
+
+        supervisor = Supervisor.from_settings(settings)
+        chat_model = build_chat_model(settings)
+    store = build_store(settings.memory_db_path)
+    workflow = build_workflow(
         DiscoveryAgent(tools, llm),
         VerificationAgent(llm),
         settings.checkpoint_db_path,
-        settings.max_research_attempts,
+        store=store,
+        max_research_attempts=settings.max_research_attempts,
+        supervisor=supervisor,
+        chat_model=chat_model,
     )
-    return BotRuntime(settings, repository, graph)
+    return BotRuntime(settings, repository, workflow)
 
 
 def build_router(runtime: BotRuntime) -> Router:
@@ -448,7 +462,7 @@ def build_router(runtime: BotRuntime) -> Router:
         _, decision, thread_id = callback.data.split(":", 2)
         await callback.answer("تم تسجيل القرار")
         result = await asyncio.to_thread(
-            runtime.graph.invoke,
+            runtime.workflow.invoke,
             Command(resume={"decision": decision}),
             thread_config(thread_id),
         )

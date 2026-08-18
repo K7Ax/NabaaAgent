@@ -50,7 +50,7 @@ def test_student_search_reuses_fresh_central_inventory(tmp_path: Path) -> None:
         official_scan_interval_minutes=30,
         notification_interval_minutes=480,
     )
-    runtime = BotRuntime(settings, Repository(settings.data_db_path), graph=object())
+    runtime = BotRuntime(settings, Repository(settings.data_db_path), workflow=object())
 
     assert due_collection_modes(runtime) == ("fast", "deep")
 
@@ -121,7 +121,7 @@ async def test_batch_delivery_deduplicates_and_persists_results(
         }
     )
     second = OpportunityCandidate.model_validate(second_data)
-    runtime = BotRuntime(Settings(), Repository(tmp_path / "telegram.sqlite"), graph=object())
+    runtime = BotRuntime(Settings(), Repository(tmp_path / "telegram.sqlite"), workflow=object())
     message = SimpleNamespace(answer=AsyncMock(), chat=SimpleNamespace(id=77))
     collected = [
         {"candidate": first.model_dump(mode="json"), "verification": {"score": 1.0}},
@@ -152,7 +152,7 @@ async def test_batch_delivery_deduplicates_and_persists_results(
 async def test_delivery_fails_closed_when_graph_has_no_verified_result(
     tmp_path: Path,
 ) -> None:
-    runtime = BotRuntime(Settings(), Repository(tmp_path / "empty.sqlite"), graph=object())
+    runtime = BotRuntime(Settings(), Repository(tmp_path / "empty.sqlite"), workflow=object())
     message = SimpleNamespace(answer=AsyncMock(), chat=SimpleNamespace(id=88))
 
     await _deliver_graph_result(
@@ -180,6 +180,6 @@ def test_runtime_builds_production_graph_and_persistence_without_live_keys(
     runtime = create_runtime(settings)
 
     assert runtime.settings is settings
-    assert runtime.graph is not None
+    assert runtime.workflow is not None
     assert runtime.repository.get_profile(999999) is None
     assert (tmp_path / "runtime.sqlite").exists()

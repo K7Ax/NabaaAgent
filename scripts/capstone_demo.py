@@ -10,11 +10,11 @@ from langgraph.types import Command
 
 from opportunity_sentinel.agents import DiscoveryAgent, VerificationAgent
 from opportunity_sentinel.api import app
-from opportunity_sentinel.graph import build_graph, thread_config
 from opportunity_sentinel.llm import ModelRouter, Provider
 from opportunity_sentinel.logging import configure_logging
 from opportunity_sentinel.models import VerificationReport, VerificationStatus
 from opportunity_sentinel.tools import InMemoryResearchTools, SourcePage
+from opportunity_sentinel.workflow import build_workflow, thread_config
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / "artifacts"
@@ -31,11 +31,14 @@ def page(content: str, *, official: bool = True, name: str = "opportunity") -> S
 
 
 def graph_for(pages: list[SourcePage]):
+    from langgraph.store.memory import InMemoryStore
+
     tools = InMemoryResearchTools(pages)
-    return build_graph(
+    return build_workflow(
         DiscoveryAgent(tools),
         VerificationAgent(),
         CHECKPOINTS,
+        store=InMemoryStore(),
         max_research_attempts=2,
     )
 

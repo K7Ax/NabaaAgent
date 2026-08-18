@@ -5,8 +5,8 @@ import uuid
 from pathlib import Path
 
 from opportunity_sentinel.config import Settings
-from opportunity_sentinel.graph import thread_config
 from opportunity_sentinel.telegram_bot import _initial_state, create_runtime
+from opportunity_sentinel.workflow import thread_config
 
 
 def main() -> None:
@@ -18,7 +18,7 @@ def main() -> None:
         raise RuntimeError("No onboarded Telegram profile is available")
     profile = profiles[0]
     thread_id = f"smoke-{uuid.uuid4().hex[:12]}"
-    result = runtime.graph.invoke(
+    result = runtime.workflow.invoke(
         _initial_state(thread_id, profile),
         thread_config(thread_id),
     )
