@@ -2,13 +2,17 @@
 
 ## Capstone acceptance criteria
 
+Each rubric section maps to a file, a test and a notebook cell in
+[`rubric-map.md`](rubric-map.md). This table records how the claim is *proved*.
+
 | Rubric area | Automated or captured proof |
 |---|---|
-| Agentic reasoning and tools | Discovery invokes first-party/Tavily/search/open tools; an executed ReAct trace records decision, action, and observation. |
-| Graph orchestration | StateGraph has nine named nodes, conditional edges, batch collection, and a bounded re-search loop. |
-| Multi-agent | Discovery and Verification are separate classes, prompts, responsibilities, and structured `AgentMessage` records connected by shared state. |
-| Security and observability | Injection test is blocked; JSON logs capture node routing, tool latency, provider fallback, failures, and human decisions. |
-| Persistence and HITL | Demo pauses at `interrupt`, rebuilds the graph from the SQLite checkpoint, then resumes with the same thread ID. |
+| Agentic reasoning and tools | The model binds three `@tool`s and chooses which to call; the executed ReAct trace records decision, action and observation. `tests/test_agent_tools.py` replays a scripted tool call offline. |
+| Orchestration | The pipeline is built with the LangGraph Functional API — `@task` steps under one `@entrypoint`, with the re-search loop written as ordinary Python. No `StateGraph` remains in `src/`. |
+| Multi-agent routing | An LLM supervisor classifies each message into one of six routes with `with_structured_output`; Discovery and Verification stay separate agents exchanging structured `AgentMessage` records. |
+| Retrieval | `rag.py` loads the shipped guides plus verified opportunities, splits, embeds, indexes in FAISS and answers with citations; `tests/test_rag.py` runs the whole path on a deterministic offline embedding. |
+| Security and observability | The injection test is blocked; JSON logs capture routing, tool latency, provider fallback, retries and human decisions; LangSmith traces every run when `LANGCHAIN_TRACING_V2` is set. |
+| Persistence and HITL | The demo pauses at `interrupt()`, rebuilds the workflow from the SQLite checkpoint, then resumes with `Command(resume=...)` on the same thread. A separate Store proves a fact written in one thread is readable in another. |
 | Cloud artifact | Dockerfile, Compose API service, persistent volume, health/readiness endpoints, and bot service. |
 
 ## Product quality metrics
