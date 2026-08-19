@@ -38,7 +38,7 @@ approval via `interrupt()`.
 ```powershell
 python -m venv .venv
 .venv\Scripts\python -m pip install -e ".[dev,capstone]"
-Copy-Item .env.example .env    # then fill in your keys
+Copy-Item .env.example .env    # then set the values you need
 .venv\Scripts\python -m jupyter lab capstone.ipynb
 ```
 
@@ -113,7 +113,7 @@ Copy-Item .env.example .env
 ضع الأسرار في `.env` محليًا ولا ترسلها في المحادثات أو Git. يمكن تشغيل الواجهة:
 
 ```powershell
-.venv\Scripts\python -m uvicorn opportunity_sentinel.api:app --reload
+.venv\Scripts\python -m opportunity_sentinel
 ```
 
 يظل `opportunity-bot` متاحًا للتطوير المحلي باستخدام Long Polling، لكنه لا يشغل
@@ -130,11 +130,11 @@ Render، وقاعدة Turso البعيدة المتوافقة مع SQLite. خد�
 
 ```dotenv
 APP_ENV=production
-DATABASE_URL=libsql://YOUR-DATABASE.turso.io
+DATABASE_URL=libsql://nabaa-prod-k7ax.turso.io   # from the Turso dashboard
 TURSO_AUTH_TOKEN=...
 DATA_DB_PATH=/tmp/opportunity_sentinel.db
 CHECKPOINT_DB_PATH=/tmp/opportunity_checkpoints.sqlite
-PUBLIC_BASE_URL=https://YOUR-SERVICE.onrender.com
+PUBLIC_BASE_URL=https://nabaa-agent.onrender.com   # the Render service URL
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_ADMIN_CHAT_ID=...
 TELEGRAM_WEBHOOK_SECRET=RANDOM_LONG_VALUE

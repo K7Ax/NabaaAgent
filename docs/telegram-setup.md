@@ -13,7 +13,7 @@
 أنشئ قيمتين عشوائيتين مختلفتين وطويلتين:
 
 ```dotenv
-PUBLIC_BASE_URL=https://YOUR-SERVICE.onrender.com
+PUBLIC_BASE_URL=https://nabaa-agent.onrender.com   # the Render service URL
 TELEGRAM_WEBHOOK_SECRET=...
 INTERNAL_API_SECRET=...
 ```

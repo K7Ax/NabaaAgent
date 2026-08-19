@@ -33,3 +33,18 @@ def test_readiness_fails_when_production_data_would_be_lost(monkeypatch) -> None
     assert response.status_code == 503
     assert response.json()["status"] == "not_ready"
     assert response.json()["durable_storage"] is False
+
+
+def test_the_module_entry_point_serves_the_api_on_the_platform_port(monkeypatch) -> None:
+    """Render assigns the port through $PORT; a hardcoded 8000 fails its health check."""
+    import opportunity_sentinel.__main__ as entry
+
+    served: dict[str, object] = {}
+    monkeypatch.setattr(entry.uvicorn, "run", lambda app, **kw: served.update(app=app, **kw))
+    monkeypatch.setenv("PORT", "10000")
+
+    entry.main()
+
+    assert served["app"] is app
+    assert served["port"] == 10000
+    assert served["host"] == "0.0.0.0"

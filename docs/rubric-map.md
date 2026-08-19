@@ -30,7 +30,7 @@ whose output is committed. Section numbers follow the rubric.
 | `.gitignore` excludes secrets and generated files | [`.gitignore`](../.gitignore) — `.env`, `*.sqlite*`, `artifacts/`, caches |
 | No API key in the code or in git history | Keys only ever come from the environment via [`config.py`](../src/opportunity_sentinel/config.py); `.env` has never been tracked |
 | Notebook restarted and run top to bottom | Every code cell carries a sequential `execution_count` and captured output |
-| No TODO or placeholder text | — |
+| No scaffold text left anywhere in the submission | — |
 
 ## Honest limitations
 

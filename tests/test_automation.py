@@ -40,7 +40,13 @@ def test_a_separate_job_reports_real_outages_twice_a_day() -> None:
     assert "--fail" in workflow
 
 
-def test_container_uses_host_port_from_platform() -> None:
+def test_container_starts_the_same_entry_point_as_local_development() -> None:
+    """The port is read by __main__.main(), which is covered in tests/test_api.py.
+
+    The container used to inline its own uvicorn command line, so the deployed process
+    and the documented one could drift apart without any test noticing.
+    """
     dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
 
-    assert "${PORT:-8000}" in dockerfile
+    assert 'CMD ["python", "-m", "opportunity_sentinel"]' in dockerfile
+    assert "uvicorn" not in dockerfile

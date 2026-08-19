@@ -19,6 +19,10 @@ dependencies = [
   "langchain-openai>=1.5,<2",
   "langchain-text-splitters>=1.1,<2",
   "langgraph>=1.0,<2",
+  # Ships the langgraph.checkpoint.sqlite and langgraph.store.sqlite namespace
+  # modules used in workflow.py. There is no importable "langgraph_checkpoint_sqlite"
+  # module, so tools that derive an import name from the distribution name will
+  # report this as unused.
   "langgraph-checkpoint-sqlite>=3.0,<4",
   "langsmith>=0.4,<1",
   "libsql>=0.1,<1",
