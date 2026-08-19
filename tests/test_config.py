@@ -30,12 +30,21 @@ def test_tracing_is_exported_to_the_environment(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_tracing_stays_off_without_a_key() -> None:
-    """A flag with no key would make every LLM call fail on an unauthorized export."""
+    """A flag with no key would make every LLM call fail on an unauthorized export.
+
+    Both fields are passed explicitly: Settings reads the developer's own ``.env``, so a
+    test that leaves one out asserts against whatever that file happens to contain and
+    changes meaning the day someone configures tracing locally.
+    """
     import os
 
-    assert configure_tracing(Settings(langchain_tracing_v2=True)) is False
+    settings = Settings(langchain_tracing_v2=True, langchain_api_key=None)
+
+    assert configure_tracing(settings) is False
     assert "LANGCHAIN_TRACING_V2" not in os.environ
 
 
 def test_tracing_stays_off_when_not_requested() -> None:
-    assert configure_tracing(Settings(langchain_api_key="lsv2-test")) is False
+    settings = Settings(langchain_tracing_v2=False, langchain_api_key="lsv2-test")
+
+    assert configure_tracing(settings) is False

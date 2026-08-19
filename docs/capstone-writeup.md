@@ -218,14 +218,16 @@ environment and would otherwise never see values loaded from `.env` — and it r
 enable tracing when the flag is set but the key is missing, which would turn every model
 call into a failed upload.
 
-The run trees in the notebook were captured through the same callback interface the
-LangSmith tracer consumes. Five things they showed:
+The notebook uploads a run, waits for it, then queries the LangSmith API by `trace_id`
+and prints what the platform stored, so the numbers below are read back out of LangSmith
+rather than measured locally. Both trace URLs are in the notebook output. Six things the
+traces showed:
 
 1. **The model call is the entire cost; the schema is free.** One routing decision is four
    runs — `RunnableWithFallbacks → RunnableSequence → ChatGroq → PydanticOutputParser`.
-   The model run takes on the order of a second and ~700 tokens; the parser run takes
-   0.2 ms. So economise on the *number* of model calls, never on the strictness of the
-   schema. That is why routing happens once per message rather than once per candidate,
+   In the trace LangSmith returned, `ChatGroq` took 865.6 ms and 705 tokens while
+   `PydanticOutputParser` took 1.1 ms and 0 tokens. So economise on the *number* of model
+   calls, never on the strictness of the schema. That is why routing happens once per message rather than once per candidate,
    and why verification stayed deterministic instead of becoming a second LLM judge.
 2. **The fallback wrapper appears on the happy path.** `RunnableWithFallbacks` is the root
    of a *successful* call, which is how you confirm the chain is wired rather than merely
@@ -239,7 +241,13 @@ LangSmith tracer consumes. Five things they showed:
    `extract` and `verify` each appearing twice under one `opportunity_workflow` run. A loop
    written as plain Python inside an `@entrypoint` is as observable as explicit graph
    edges.
-5. **Latency is network, not logic.** Every offline task completed in under a millisecond
+5. **Token counts roll up the tree; latencies do not.** All three chain runs report the
+   same 705 tokens as the `ChatGroq` run beneath them — usage is summed over the subtree,
+   so a parent's token count is not its own work. Latency is the opposite:
+   `RunnableWithFallbacks` at 875.0 ms wraps `ChatGroq` at 865.6 ms, and the ~9 ms
+   difference is the wrapper itself. Reading a trace means knowing which numbers are
+   inclusive.
+6. **Latency is network, not logic.** Every offline task completed in under a millisecond
    and the whole twelve-run workflow in tens of milliseconds. All real latency is network
    and model time — which is the evidence behind putting retry policies on exactly those
    tasks and nowhere else.
@@ -263,8 +271,8 @@ LangSmith tracer consumes. Five things they showed:
 
 Stated plainly rather than left to be discovered:
 
-- The LangSmith traces in §8 were captured locally through the tracer's callback
-  interface; this run had no `LANGCHAIN_API_KEY`, so nothing was uploaded to a project.
+- The §8 trace URLs point at a private LangSmith project, so a grader without access to
+  that workspace sees the run tables printed in the notebook rather than the platform UI.
 - The legacy batch collector still parses JSON by hand; the graded pipeline does not.
 - The deployed free-tier service does not install `sentence-transformers`, so it answers
   "knowledge base unavailable" for retrieval questions rather than failing to boot. RAG

@@ -15,7 +15,7 @@ whose output is committed. Section numbers follow the rubric.
 | **5** | `interrupt()` **and** `Command(resume=...)` both demonstrated | [`workflow.py`](../src/opportunity_sentinel/workflow.py) `interrupt({...})`; resumed by the admin flow in [`telegram_bot.py`](../src/opportunity_sentinel/telegram_bot.py) | `tests/test_workflow.py` — pause/resume and resume-after-rebuild | §5 — interrupt payload printed, then resumed by a *different* workflow object |
 | **6** | Functional API (`@task`/`@entrypoint`) + ≥2 error strategies with a real `RetryPolicy` | [`workflow.py`](../src/opportunity_sentinel/workflow.py) — 7 `@task`s, 1 `@entrypoint`, `NETWORK_RETRY` / `LLM_RETRY`, `.with_fallbacks()`, fail-closed sanitising | `tests/test_workflow.py` | §6 — decorators listed, `StateGraph` count = 0, retry predicate table, a flaky task retried 3×, fallback firing, injection blocked |
 | **7** | Implement a named workflow pattern and name it | **Evaluator-Optimizer** — generator `discover`/`extract`, evaluator `verify`, optimizer `refine_query(decision, missing_fields)` | `tests/test_workflow.py::test_missing_evidence_researches_then_interrupts_and_resumes` | §7 — both queries printed; the refined one verifies |
-| **8** | `LANGCHAIN_TRACING_V2` + what the trace showed | [`config.configure_tracing`](../src/opportunity_sentinel/config.py), [`.env.example`](../.env.example) | `tests/test_config.py` | §8 — run trees captured, five findings written from them |
+| **8** | `LANGCHAIN_TRACING_V2` + what the trace showed | [`config.configure_tracing`](../src/opportunity_sentinel/config.py), [`.env.example`](../.env.example) | `tests/test_config.py` | §8 — traces uploaded and queried back from the LangSmith API, six findings written from them |
 
 ## Submission requirements
 
@@ -36,10 +36,10 @@ whose output is committed. Section numbers follow the rubric.
 
 These are stated here rather than discovered by a grader:
 
-- **LangSmith uploads are not shown.** The traces in §8 are captured through the callback
-  interface the LangSmith tracer consumes; with `LANGCHAIN_API_KEY` set they upload to the
-  project unchanged, but this run had no key, so the notebook shows the run trees locally
-  rather than a smith.langchain.com screenshot.
+- **The LangSmith project is private.** §8 uploads real traces and queries them back out
+  of the API, printing what the platform stored, and both trace URLs are in the notebook
+  output — but a grader without access to that workspace will see the printed run tables
+  rather than the LangSmith UI.
 - **The batch collector still uses hand-rolled JSON extraction.**
   [`scripts/scheduled_job.py`](../scripts/scheduled_job.py) and
   [`llm.py`](../src/opportunity_sentinel/llm.py) predate the LangChain layer and run in
